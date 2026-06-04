@@ -1,0 +1,135 @@
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const { createRateLimiter } = require("../middleware/rateLimit");
+const {
+  validateRegisterRequest,
+  validateLoginRequest,
+} = require("../middleware/validation");
+const User = require("../models/User");
+
+const router = express.Router();
+const authRateLimit = createRateLimiter({
+  keyPrefix: "auth",
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 20,
+  message: "Too many authentication attempts. Please try again later.",
+});
+
+const normalizeEmail = (email) =>
+  typeof email === "string" ? email.trim().toLowerCase() : "";
+
+const createToken = (userId) =>
+  jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
+const buildUserResponse = (user) => ({
+  _id: user._id,
+  name: user.name,
+  email: user.email,
+  phone: user.phone,
+  role: user.role,
+  isPaid: user.isPaid,
+  accessExpiry: user.accessExpiry,
+  createdAt: user.createdAt,
+});
+
+const logLogin = (stage, payload) => {
+  console.log(`[Auth][Login] ${stage}`, payload);
+};
+
+router.post("/register", authRateLimit, validateRegisterRequest, async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      return res.status(400).json({ message: "User already exists" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const user = await User.create({
+      name: name.trim(),
+      email: normalizedEmail,
+      phone: phone.trim(),
+      passwordHash,
+      isPaid: false,
+    });
+
+    return res.status(201).json({
+      token: createToken(user._id),
+      user: buildUserResponse(user),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Registration failed" });
+  }
+});
+
+router.post("/login", authRateLimit, validateLoginRequest, async (req, res) => {
+  try {
+    logLogin("route-entered", {
+      email: req.body?.email,
+      ip: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    logLogin("normalized-email", { normalizedEmail });
+
+    const user = await User.findOne({ email: normalizedEmail });
+    logLogin("user-lookup", {
+      found: Boolean(user),
+      userId: user?._id?.toString?.(),
+      role: user?.role,
+    });
+
+    if (!user) {
+      logLogin("response", {
+        status: 401,
+        body: { message: "Invalid credentials" },
+      });
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    logLogin("password-compare", { isMatch });
+
+    if (!isMatch) {
+      logLogin("response", {
+        status: 401,
+        body: { message: "Invalid credentials" },
+      });
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const body = {
+      token: createToken(user._id),
+      user: buildUserResponse(user),
+    };
+
+    logLogin("response", {
+      status: 200,
+      body: {
+        token: "[redacted]",
+        user: body.user,
+      },
+    });
+
+    return res.json(body);
+  } catch (error) {
+    logLogin("error", {
+      message: error.message,
+      stack: error.stack,
+    });
+    logLogin("response", {
+      status: 500,
+      body: { message: "Login failed" },
+    });
+    return res.status(500).json({ message: "Login failed" });
+  }
+});
+
+module.exports = router;
