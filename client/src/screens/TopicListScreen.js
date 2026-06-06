@@ -7,16 +7,29 @@ import {
   Text,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
 import { getTopics } from "../api/content";
-import { EmptyState, ErrorState, LoadingState } from "../components/ScreenState";
-import { useAppTheme } from "../utils/theme";
+import AnimatedScreenView from "../components/AnimatedScreenView";
+import PageSkeleton from "../components/PageSkeleton";
+import SectionHeader from "../components/SectionHeader";
+import StaggeredItem from "../components/StaggeredItem";
+import { EmptyState, ErrorState } from "../components/ScreenState";
 import { useResponsiveLayout } from "../utils/layout";
+import {
+  fontWeights,
+  radius,
+  shadows,
+  spacing,
+  typography,
+  useAppTheme,
+} from "../utils/theme";
 
 export default function TopicListScreen({ navigation, route }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
+  const compactLayout = layout.width < 390;
   const { module } = route.params;
   const [topics, setTopics] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -48,46 +61,107 @@ export default function TopicListScreen({ navigation, route }) {
   );
 
   if (loading) {
-    return <LoadingState label="Loading topics..." />;
+    return (
+      <PageSkeleton
+        titleWidth="30%"
+        subtitleWidth="56%"
+        rows={5}
+        rowHeight={92}
+      />
+    );
   }
 
   if (error) {
-    return <ErrorState title="Unable to load topics" subtitle={error} onRetry={() => loadTopics()} />;
+    return (
+      <ErrorState
+        title="Unable to load topics"
+        subtitle={error}
+        onRetry={() => loadTopics()}
+      />
+    );
   }
 
   if (!topics.length) {
-    return <EmptyState title="No topics found" subtitle="Add content to this module." />;
+    return (
+      <EmptyState
+        icon="list-outline"
+        title="No topics found"
+        subtitle="Topics for this module will appear here."
+      />
+    );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
       <FlatList
-        numColumns={layout.listColumns}
         refreshing={refreshing}
         onRefresh={() => loadTopics(true)}
-        columnWrapperStyle={layout.listColumns > 1 ? styles.columnWrapper : undefined}
+        showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.list,
           {
             paddingHorizontal: layout.horizontalPadding,
-            paddingVertical: layout.sectionGap,
+            paddingBottom: spacing.xxxl,
           },
         ]}
         data={topics}
         keyExtractor={(item) => item._id}
-        renderItem={({ item }) => (
-          <View style={[styles.itemWrap, layout.listColumns > 1 && styles.itemWrapHalf]}>
+        ListHeaderComponent={
+          <AnimatedScreenView style={[styles.header, { maxWidth: layout.contentMaxWidth }]}>
+            <Text style={[styles.title, { color: colors.text }]}>Topics</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Module {module.number} • {module.title}
+            </Text>
+            <SectionHeader title="Choose a topic" />
+            <Text style={[styles.sectionHint, { color: colors.textSecondary }]}>
+              Select a topic to open its previous year questions.
+            </Text>
+          </AnimatedScreenView>
+        }
+        renderItem={({ item, index }) => (
+          <StaggeredItem
+            style={[styles.itemWrap, { maxWidth: layout.contentMaxWidth }]}
+            index={index}
+          >
             <Pressable
               onPress={() => navigation.navigate("QuestionList", { topic: item })}
               style={[
                 styles.card,
-                styles.cardFill,
-                { backgroundColor: colors.card, borderColor: colors.border },
+                shadows.card,
+                compactLayout && styles.cardCompact,
+                { backgroundColor: colors.surface, borderColor: colors.border },
               ]}
             >
-              <Text style={[styles.cardTitle, { color: colors.text }]}>{item.name}</Text>
+              <View
+                style={[
+                  styles.iconWrap,
+                  compactLayout && styles.iconWrapCompact,
+                  { backgroundColor: colors.primaryLight },
+                ]}
+              >
+                <Ionicons name="list-outline" size={20} color={colors.primary} />
+              </View>
+              <View style={styles.cardBody}>
+                <Text
+                  numberOfLines={2}
+                  style={[styles.cardTitle, compactLayout && styles.cardTitleCompact, { color: colors.text }]}
+                >
+                  {item.name}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.cardSubtitle, compactLayout && styles.cardSubtitleCompact, { color: colors.textSecondary }]}
+                >
+                  Tap to view question bank
+                </Text>
+              </View>
+              <Ionicons
+                name="chevron-forward"
+                size={compactLayout ? 18 : 20}
+                color={colors.textTertiary}
+              />
             </Pressable>
-          </View>
+          </StaggeredItem>
         )}
       />
     </SafeAreaView>
@@ -96,16 +170,81 @@ export default function TopicListScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  list: { alignItems: "center" },
-  columnWrapper: { gap: 12 },
-  itemWrap: { width: "100%", marginBottom: 12 },
-  itemWrapHalf: { width: "50%", paddingHorizontal: 6 },
+  list: {
+    paddingTop: spacing.md,
+  },
+  header: {
+    width: "100%",
+    marginBottom: spacing.lg,
+    alignSelf: "center",
+  },
+  title: {
+    fontSize: typography.display,
+    fontWeight: fontWeights.extrabold,
+    marginBottom: spacing.xxs,
+  },
+  subtitle: {
+    fontSize: typography.base,
+    lineHeight: 22,
+    marginBottom: spacing.sm,
+  },
+  sectionHint: {
+    fontSize: typography.sm,
+    lineHeight: 18,
+    marginTop: -spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  itemWrap: {
+    width: "100%",
+    marginBottom: spacing.sm,
+    alignSelf: "center",
+  },
   card: {
     borderWidth: 1,
-    borderRadius: 16,
-    padding: 18,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     width: "100%",
+    minHeight: 76,
+    flexDirection: "row",
+    alignItems: "center",
   },
-  cardFill: { minHeight: 96, justifyContent: "center" },
-  cardTitle: { fontSize: 17, fontWeight: "700" },
+  cardCompact: {
+    paddingHorizontal: spacing.sm,
+    minHeight: 72,
+  },
+  iconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.lg,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
+  },
+  iconWrapCompact: {
+    width: 34,
+    height: 34,
+    marginRight: spacing.sm,
+  },
+  cardBody: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: spacing.xs,
+  },
+  cardTitle: {
+    fontSize: typography.base,
+    fontWeight: fontWeights.semibold,
+    lineHeight: 20,
+  },
+  cardTitleCompact: {
+    fontSize: typography.md,
+  },
+  cardSubtitle: {
+    fontSize: typography.sm,
+    fontWeight: fontWeights.medium,
+    marginTop: 4,
+  },
+  cardSubtitleCompact: {
+    fontSize: typography.xs,
+  },
 });

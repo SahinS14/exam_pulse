@@ -12,6 +12,7 @@ const {
   validateQuestionBody,
   validateConceptBody,
   validateNoteBody,
+  validateAdminNotificationBody,
 } = require("../middleware/validation");
 const {
   singleFileUpload,
@@ -28,7 +29,8 @@ const Concept = require("../models/Concept");
 const Note = require("../models/Note");
 const User = require("../models/User");
 const Report = require("../models/Report");
-const { sendExpoPushNotifications } = require("../utils/expoPush");
+const Notification = require("../models/Notification");
+const { createStudentNotification } = require("../utils/notificationService");
 const {
   uploadLocalFileToCloudinary,
   destroyCloudinaryAsset,
@@ -137,14 +139,6 @@ const buildUploadedFileMetadata = (reqFile, uploadedFile) => ({
   cloudinaryResourceType: uploadedFile.resource_type || "image",
 });
 
-const notifyStudents = async ({ title, body, data }) => {
-  try {
-    await sendExpoPushNotifications({ title, body, data });
-  } catch (error) {
-    console.error("Push notification send failed", error.message);
-  }
-};
-
 const cleanupTrackedAsset = async (publicId, resourceType) => {
   if (!publicId) {
     return;
@@ -163,6 +157,43 @@ router.get("/branches", async (req, res) => {
     return res.json(branches);
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch branches" });
+  }
+});
+
+router.get("/notifications", async (req, res) => {
+  try {
+    const notifications = await Notification.find({ audience: { $in: ["students", "paid-students"] } })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate("createdBy", "name email")
+      .lean();
+
+    return res.json(notifications);
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to fetch notifications" });
+  }
+});
+
+router.post("/notifications", validateAdminNotificationBody, async (req, res) => {
+  try {
+    const result = await createStudentNotification({
+      title: req.body.title.trim(),
+      body: req.body.body.trim(),
+      type: req.body.type,
+      data: {
+        type: req.body.type,
+        source: "admin-manual",
+      },
+      createdBy: req.user._id,
+      premiumOnly: false,
+    });
+
+    return res.status(201).json({
+      ...result.notification.toObject(),
+      recipients: result.recipients,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to send notification" });
   }
 });
 
@@ -493,16 +524,19 @@ router.post("/question", validateQuestionBody, async (req, res) => {
     const questionPayload = normalizeQuestionPayload(req.body);
     const question = await Question.create(questionPayload);
 
-    await notifyStudents({
+    await createStudentNotification({
       title: "New question added",
       body: questionPayload.markCategory
         ? `${questionPayload.markCategory} question added to your library`
         : "A new question was added to your library",
+      type: "content",
       data: {
         type: "question",
         questionId: String(question._id),
         topicId: String(question.topicId),
       },
+      createdBy: req.user._id,
+      premiumOnly: true,
     });
 
     return res.status(201).json(question);
@@ -562,14 +596,17 @@ router.post("/concept", validateConceptBody, async (req, res) => {
   try {
     const concept = await Concept.create(normalizeConceptPayload(req.body));
 
-    await notifyStudents({
+    await createStudentNotification({
       title: "New concept added",
       body: concept.title || "A new important concept was added",
+      type: "content",
       data: {
         type: "concept",
         conceptId: String(concept._id),
         moduleId: String(concept.moduleId),
       },
+      createdBy: req.user._id,
+      premiumOnly: true,
     });
 
     return res.status(201).json(concept);
@@ -668,14 +705,17 @@ router.post(
         uploadedAt: fileMetadata.uploadedAt,
       });
 
-      await notifyStudents({
+      await createStudentNotification({
         title: "New note uploaded",
         body: req.body.title.trim() || "Fresh study material is now available",
+        type: "content",
         data: {
           type: "note",
           noteId: String(note._id),
           moduleId: String(note.moduleId),
         },
+        createdBy: req.user._id,
+        premiumOnly: true,
       });
 
       return res.status(201).json(note);

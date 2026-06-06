@@ -30,6 +30,23 @@ import { validateUploadAsset } from "../../utils/uploadValidation";
 const MARK_CATEGORIES = ["1 Mark", "2 Mark", "5 Mark", "10 Mark", "Short", "Long"];
 const EMPTY_EXAM_GROUP = { examName: "", yearsText: "" };
 
+const normalizeTags = (tags = []) => {
+  const seen = new Set();
+
+  return tags.reduce((accumulator, tag) => {
+    const cleaned = String(tag || "").trim();
+    const key = cleaned.toLowerCase();
+
+    if (!cleaned || seen.has(key)) {
+      return accumulator;
+    }
+
+    seen.add(key);
+    accumulator.push(cleaned);
+    return accumulator;
+  }, []);
+};
+
 const buildExamGroups = (yearAppeared = []) => {
   const groupedEntries = yearAppeared.reduce((accumulator, item) => {
     const examName = item?.examName?.trim();
@@ -74,7 +91,7 @@ export default function AdminQuestionFormScreen({ navigation, route }) {
     markCategory: editingQuestion?.markCategory || "",
     images: editingQuestion?.images || [],
     examGroups: buildExamGroups(editingQuestion?.yearAppeared),
-    tags: editingQuestion?.tags || [],
+    tags: normalizeTags(editingQuestion?.tags || []),
     tagInput: "",
     topicId: editingQuestion?.topicId || "",
     isMostRepeated: Boolean(editingQuestion?.isMostRepeated),
@@ -216,7 +233,7 @@ export default function AdminQuestionFormScreen({ navigation, route }) {
 
     setForm((current) => ({
       ...current,
-      tags: current.tags.includes(tag) ? current.tags : [...current.tags, tag],
+      tags: normalizeTags([...current.tags, tag]),
       tagInput: "",
     }));
   };
@@ -224,7 +241,7 @@ export default function AdminQuestionFormScreen({ navigation, route }) {
   const handleRemoveTag = (tagToRemove) => {
     setForm((current) => ({
       ...current,
-      tags: current.tags.filter((tag) => tag !== tagToRemove),
+      tags: current.tags.filter((tag) => tag.toLowerCase() !== tagToRemove.toLowerCase()),
     }));
   };
 
@@ -366,9 +383,9 @@ export default function AdminQuestionFormScreen({ navigation, route }) {
           </View>
           <View style={styles.tagsWrap}>
             {form.tags.length ? (
-              form.tags.map((tag) => (
+              form.tags.map((tag, index) => (
                 <Pressable
-                  key={tag}
+                  key={`${tag}-${index}`}
                   onPress={() => handleRemoveTag(tag)}
                   style={styles.tagChip}
                 >

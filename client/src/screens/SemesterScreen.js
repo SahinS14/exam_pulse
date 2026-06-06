@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   FlatList,
   Pressable,
@@ -7,13 +7,26 @@ import {
   Text,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getSemesters } from "../api/content";
-import { EmptyState, ErrorState, LoadingState } from "../components/ScreenState";
+import { getSemesters, getSubjects } from "../api/content";
+import AnimatedScreenView from "../components/AnimatedScreenView";
+import EmptyState from "../components/EmptyState";
+import PageSkeleton from "../components/PageSkeleton";
+import SectionHeader from "../components/SectionHeader";
+import StaggeredItem from "../components/StaggeredItem";
+import { ErrorState } from "../components/ScreenState";
 import { useAppStore } from "../store/appStore";
-import { useAppTheme } from "../utils/theme";
 import { useResponsiveLayout } from "../utils/layout";
+import {
+  fontWeights,
+  radius,
+  shadows,
+  spacing,
+  typography,
+  useAppTheme,
+} from "../utils/theme";
 
 export default function SemesterScreen({ navigation, route }) {
   const { colors } = useAppTheme();
@@ -21,6 +34,7 @@ export default function SemesterScreen({ navigation, route }) {
   const { branch } = route.params;
   const setSelectedSemester = useAppStore((state) => state.setSelectedSemester);
   const [semesters, setSemesters] = useState([]);
+  const [subjectCountMap, setSubjectCountMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -34,7 +48,21 @@ export default function SemesterScreen({ navigation, route }) {
         setLoading(true);
       }
       const data = await getSemesters(branch._id);
-      setSemesters(data.sort((left, right) => left.number - right.number));
+      const sorted = data.sort((left, right) => left.number - right.number);
+      setSemesters(sorted);
+
+      const countEntries = await Promise.all(
+        sorted.map(async (semester) => {
+          try {
+            const subjects = await getSubjects(semester._id);
+            return [semester._id, subjects.length];
+          } catch (subjectError) {
+            return [semester._id, 0];
+          }
+        })
+      );
+
+      setSubjectCountMap(Object.fromEntries(countEntries));
     } catch (loadError) {
       setError(loadError.response?.data?.message || "Failed to load semesters.");
     } finally {
@@ -49,17 +77,40 @@ export default function SemesterScreen({ navigation, route }) {
     }, [loadSemesters])
   );
 
+  const semesterMap = useMemo(
+    () => new Map(semesters.map((semester) => [semester.number, semester])),
+    [semesters]
+  );
+  const gridData = Array.from({ length: 8 }, (_, index) => {
+    const number = index + 1;
+    return semesterMap.get(number) || { _id: `placeholder-${number}`, number, placeholder: true };
+  });
+
   if (loading) {
-    return <LoadingState label="Loading semesters..." />;
+    return (
+      <PageSkeleton
+        titleWidth="46%"
+        subtitleWidth="64%"
+        rows={4}
+        rowHeight={118}
+      />
+    );
   }
 
   if (error) {
-    return <ErrorState title="Unable to load semesters" subtitle={error} onRetry={() => loadSemesters()} />;
+    return (
+      <ErrorState
+        title="Unable to load semesters"
+        subtitle={error}
+        onRetry={() => loadSemesters()}
+      />
+    );
   }
 
   if (!semesters.length) {
     return (
       <EmptyState
+        icon="school-outline"
         title="No semesters found"
         subtitle="This branch has no semester content yet."
       />
@@ -67,62 +118,132 @@ export default function SemesterScreen({ navigation, route }) {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
       <FlatList
-        numColumns={layout.listColumns}
+        data={gridData}
+        keyExtractor={(item) => item._id}
+        numColumns={2}
         refreshing={refreshing}
         onRefresh={() => loadSemesters(true)}
-        columnWrapperStyle={layout.listColumns > 1 ? styles.columnWrapper : undefined}
+        columnWrapperStyle={styles.columnWrapper}
         contentContainerStyle={[
           styles.list,
           {
             paddingHorizontal: layout.horizontalPadding,
-            paddingVertical: layout.sectionGap,
+            paddingBottom: spacing.xxxl,
           },
         ]}
-        data={semesters}
-        keyExtractor={(item) => item._id}
-        renderItem={({ item }) => (
-          <View style={[styles.itemWrap, layout.listColumns > 1 && styles.itemWrapHalf]}>
-            <Pressable
-              onPress={() => {
-                setSelectedSemester(item);
-                navigation.navigate("Subject", { branch, semester: item });
-              }}
-              style={[
-                styles.card,
-                styles.cardFill,
-                { backgroundColor: colors.card, borderColor: colors.border },
-              ]}
-            >
-              <Text style={[styles.cardTitle, { color: colors.text }]}>Semester {item.number}</Text>
-            </Pressable>
-          </View>
-        )}
+        ListHeaderComponent={
+          <AnimatedScreenView style={[styles.header, { maxWidth: layout.contentMaxWidth }]}>
+            <Text style={[styles.title, { color: colors.text }]}>Semesters</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Explore the academic path for {branch.name}.
+            </Text>
+            <SectionHeader title="Choose a semester" />
+          </AnimatedScreenView>
+        }
+        renderItem={({ item, index }) => {
+          const active = !item.placeholder;
+          const subjectCount = active ? subjectCountMap[item._id] || 0 : 0;
+
+          return (
+            <StaggeredItem style={styles.cardWrap} index={index}>
+              <Pressable
+                disabled={!active}
+                onPress={() => {
+                  setSelectedSemester(item);
+                  navigation.navigate("Subject", { branch, semester: item });
+                }}
+                style={[
+                  styles.card,
+                  shadows.card,
+                  {
+                    backgroundColor: active ? colors.surface : colors.surfaceSecondary,
+                    borderColor: active ? colors.border : colors.borderLight,
+                    opacity: active ? 1 : 0.92,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.iconWrap,
+                    {
+                      backgroundColor: active ? colors.primaryLight : colors.borderLight,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={active ? "albums-outline" : "lock-closed-outline"}
+                    size={22}
+                    color={active ? colors.primary : colors.textTertiary}
+                  />
+                </View>
+                <Text style={[styles.cardTitle, { color: colors.text }]}>Sem {item.number}</Text>
+                <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>
+                  {active
+                    ? `${subjectCount} Subject${subjectCount === 1 ? "" : "s"}`
+                    : "Coming Soon"}
+                </Text>
+              </Pressable>
+            </StaggeredItem>
+          );
+        }}
       />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-  },
+  safeArea: { flex: 1 },
   list: {
+    paddingTop: spacing.md,
     alignItems: "center",
   },
-  columnWrapper: { gap: 12 },
-  itemWrap: { width: "100%", marginBottom: 12 },
-  itemWrapHalf: { width: "50%", paddingHorizontal: 6 },
-  card: {
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 18,
+  header: {
     width: "100%",
+    marginBottom: spacing.lg,
   },
-  cardFill: { minHeight: 96, justifyContent: "center" },
+  title: {
+    fontSize: typography.display,
+    fontWeight: fontWeights.extrabold,
+    marginBottom: spacing.xs,
+  },
+  subtitle: {
+    fontSize: typography.base,
+    lineHeight: 24,
+    marginBottom: spacing.lg,
+  },
+  columnWrapper: {
+    justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+  cardWrap: {
+    width: "48.5%",
+  },
+  card: {
+    minHeight: 120,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.md,
+  },
+  iconWrap: {
+    width: 46,
+    height: 46,
+    borderRadius: radius.lg,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.sm,
+  },
   cardTitle: {
-    fontSize: 18,
-    fontWeight: "700",
+    fontSize: typography.xl,
+    fontWeight: fontWeights.bold,
+    marginBottom: spacing.xxs,
+  },
+  cardSubtitle: {
+    fontSize: typography.md,
+    fontWeight: fontWeights.medium,
+    textAlign: "center",
   },
 });

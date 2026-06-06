@@ -7,6 +7,7 @@ import Constants from "expo-constants";
 
 import { registerPushToken } from "../api/notifications";
 import { useAuthStore } from "../store/authStore";
+import { useNotificationStore } from "../store/notificationStore";
 
 const ACCESS_REMINDER_KEY = "accessReminderExpiry";
 const ACCESS_REMINDER_ID_KEY = "accessReminderId";
@@ -103,6 +104,23 @@ export default function NotificationBootstrap() {
   const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
   const accessExpiry = useAuthStore((state) => state.accessExpiry);
+  const incrementUnreadCount = useNotificationStore((state) => state.incrementUnreadCount);
+  const clearUnreadCount = useNotificationStore((state) => state.clearUnreadCount);
+
+  useEffect(() => {
+    if (!token || !user?._id) {
+      clearUnreadCount();
+      return undefined;
+    }
+
+    const receivedSubscription = Notifications.addNotificationReceivedListener(() => {
+      incrementUnreadCount();
+    });
+
+    return () => {
+      receivedSubscription.remove();
+    };
+  }, [clearUnreadCount, incrementUnreadCount, token, user?._id]);
 
   useEffect(() => {
     if (!token || !user?._id) {

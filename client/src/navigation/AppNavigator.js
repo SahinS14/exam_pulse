@@ -18,10 +18,12 @@ import TopRevisionScreen from "../screens/TopRevisionScreen";
 import WebViewerScreen from "../screens/WebViewerScreen";
 import AdminEntityManagerScreen from "../screens/admin/AdminEntityManagerScreen";
 import AdminNotesUploadScreen from "../screens/admin/AdminNotesUploadScreen";
+import AdminNotificationsScreen from "../screens/admin/AdminNotificationsScreen";
 import AdminQuestionFormScreen from "../screens/admin/AdminQuestionFormScreen";
 import AdminQuestionsScreen from "../screens/admin/AdminQuestionsScreen";
 import AdminReportsScreen from "../screens/admin/AdminReportsScreen";
 import AdminUsersScreen from "../screens/admin/AdminUsersScreen";
+import NotificationCenterScreen from "../screens/NotificationCenterScreen";
 import LoginScreen from "../screens/auth/LoginScreen";
 import PaywallScreen from "../screens/auth/PaywallScreen";
 import RegisterScreen from "../screens/auth/RegisterScreen";
@@ -130,6 +132,11 @@ export default function AppNavigator() {
         options={{ title: "Search" }}
       />
       <Stack.Screen
+        name="Notifications"
+        component={NotificationCenterScreen}
+        options={{ title: "Notifications" }}
+      />
+      <Stack.Screen
         name="AdminEntityManager"
         component={AdminEntityManagerScreen}
         options={({ route }) => ({
@@ -152,6 +159,11 @@ export default function AppNavigator() {
         name="AdminNotes"
         component={AdminNotesUploadScreen}
         options={{ title: "Manage Notes" }}
+      />
+      <Stack.Screen
+        name="AdminNotifications"
+        component={AdminNotificationsScreen}
+        options={{ title: "Send Notifications" }}
       />
       <Stack.Screen
         name="AdminUsers"

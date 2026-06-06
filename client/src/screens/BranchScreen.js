@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   FlatList,
-  Image,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -10,132 +10,156 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import { SymbolView } from "expo-symbols";
 
 import { getBranches, getSemesters } from "../api/content";
-import { EmptyState, ErrorState, LoadingState } from "../components/ScreenState";
+import AppBrandHeader from "../components/AppBrandHeader";
+import EmptyState from "../components/EmptyState";
+import PageSkeleton from "../components/PageSkeleton";
+import SectionHeader from "../components/SectionHeader";
+import { ErrorState } from "../components/ScreenState";
 import { useAppStore } from "../store/appStore";
-import { useAppTheme } from "../utils/theme";
 import { useResponsiveLayout } from "../utils/layout";
+import {
+  fontWeights,
+  radius,
+  shadows,
+  spacing,
+  typography,
+  useAppTheme,
+} from "../utils/theme";
 
-const HEADER_LOGO = require("../../assets/images/exampulse.png");
-
-const BRANCH_VISUALS = {
+const BRANCH_META = {
   CSE: {
-    icon: "chevron.left.forwardslash.chevron.right",
-    fallback: "</>",
-    tint: "#2563eb",
-    background: "#edf4ff",
-  },
-  "CSE AI": {
-    icon: "brain.head.profile",
-    fallback: "AI",
-    tint: "#16a34a",
-    background: "#eefcf3",
-  },
-  CST: {
-    icon: "display",
-    fallback: "▣",
-    tint: "#8b5cf6",
-    background: "#f4efff",
+    icon: "code-slash-outline",
+    color: "#4F46E5",
+    background: "#EEF2FF",
   },
   ECE: {
-    icon: "cpu",
-    fallback: "◫",
-    tint: "#f97316",
-    background: "#fff4ea",
+    icon: "radio-outline",
+    color: "#F59E0B",
+    background: "#FEF3C7",
   },
   EEE: {
-    icon: "bolt",
-    fallback: "⚡",
-    tint: "#f4b400",
-    background: "#fff9e8",
+    icon: "flash-outline",
+    color: "#10B981",
+    background: "#D1FAE5",
+  },
+  EIE: {
+    icon: "pulse-outline",
+    color: "#8B5CF6",
+    background: "#EDE9FE",
+  },
+  VLSI: {
+    icon: "layers-outline",
+    color: "#EF4444",
+    background: "#FEE2E2",
+  },
+  CST: {
+    icon: "grid-outline",
+    color: "#14B8A6",
+    background: "#CCFBF1",
+  },
+  "CSE AI": {
+    icon: "hardware-chip-outline",
+    color: "#4F46E5",
+    background: "#EEF2FF",
   },
   Mechanical: {
-    icon: "gearshape",
-    fallback: "⚙",
-    tint: "#1d4ed8",
-    background: "#eef4ff",
+    icon: "construct-outline",
+    color: "#2563EB",
+    background: "#DBEAFE",
   },
   Civil: {
-    icon: "building.2",
-    fallback: "▦",
-    tint: "#ef476f",
-    background: "#fff0f3",
+    icon: "business-outline",
+    color: "#EC4899",
+    background: "#FCE7F3",
   },
 };
 
-function BrowseSymbol({ name, size, tintColor, fallback }) {
+function getBranchMeta(name) {
   return (
-    <SymbolView
-      name={name}
-      size={size}
-      tintColor={tintColor}
-      fallback={
-        <Text
-          style={{
-            color: tintColor,
-            fontSize: size * 0.62,
-            fontWeight: "700",
-            textAlign: "center",
-          }}
-        >
-          {fallback}
-        </Text>
-      }
-    />
-  );
-}
-
-function getBranchVisual(name) {
-  return (
-    BRANCH_VISUALS[name] || {
-      icon: "books.vertical",
-      fallback: "▥",
-      tint: "#1f6feb",
-      background: "#edf4ff",
+    BRANCH_META[name] || {
+      icon: "school-outline",
+      color: "#4F46E5",
+      background: "#EEF2FF",
     }
   );
 }
 
-function BranchCard({ item, colors, columnWidth, semesterLabel, onPress }) {
-  const visual = getBranchVisual(item.name);
-  const isLongTitle = item.name?.length >= 10;
-  const isLongSubtitle = semesterLabel?.length >= 14;
+function BranchRow({ item, semesterLabel, hasSemesters, onPress, index, compactLayout }) {
+  const { colors } = useAppTheme();
+  const meta = getBranchMeta(item.name);
+  const scale = useRef(new Animated.Value(0.96)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 250,
+        delay: index * 50,
+        useNativeDriver: true,
+      }),
+      Animated.timing(scale, {
+        toValue: 1,
+        duration: 250,
+        delay: index * 50,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [index, opacity, scale]);
+
+  const animateScale = (value) => {
+    Animated.timing(scale, {
+      toValue: value,
+      duration: 100,
+      useNativeDriver: true,
+    }).start();
+  };
 
   return (
-    <View style={[styles.branchWrap, { width: columnWidth }]}>
+    <Animated.View style={{ opacity, transform: [{ scale }] }}>
       <Pressable
         onPress={() => onPress(item)}
-        style={({ pressed }) => [
+        onPressIn={() => animateScale(0.98)}
+        onPressOut={() => animateScale(1)}
+        style={[
           styles.branchCard,
+          shadows.card,
+          compactLayout && styles.branchCardCompact,
           {
-            backgroundColor: colors.card,
+            backgroundColor: colors.surface,
             borderColor: colors.border,
-            shadowColor: colors.shadow,
           },
-          pressed ? styles.pressedCard : null,
         ]}
       >
-        <View style={[styles.branchIconWrap, { backgroundColor: visual.background }]}>
-          <BrowseSymbol
-            name={visual.icon}
-            size={30}
-            tintColor={visual.tint}
-            fallback={visual.fallback}
+        <View style={styles.branchTopRow}>
+          <View
+            style={[
+              styles.branchIconWrap,
+              compactLayout && styles.branchIconWrapCompact,
+              { backgroundColor: meta.background },
+            ]}
+          >
+            <Ionicons name={meta.icon} size={compactLayout ? 22 : 24} color={meta.color} />
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={compactLayout ? 18 : 20}
+            color={colors.textTertiary}
           />
         </View>
 
-        <View style={styles.branchBody}>
+        <View style={styles.branchTextWrap}>
           <Text
-            numberOfLines={1}
+            numberOfLines={2}
             style={[
               styles.branchTitle,
-              {
-                color: colors.text,
-                fontSize: isLongTitle ? 15 : 17,
-              },
+              compactLayout && styles.branchTitleCompact,
+              { color: colors.text },
             ]}
           >
             {item.name}
@@ -144,31 +168,32 @@ function BranchCard({ item, colors, columnWidth, semesterLabel, onPress }) {
             numberOfLines={1}
             style={[
               styles.branchSubtitle,
-              {
-                color: colors.subtext,
-                fontSize: isLongSubtitle ? 12 : 13,
-              },
+              compactLayout && styles.branchSubtitleCompact,
+              { color: hasSemesters ? colors.textSecondary : colors.warning },
             ]}
           >
-            {semesterLabel}
+            {hasSemesters ? semesterLabel : "Coming Soon"}
           </Text>
         </View>
-
-        <BrowseSymbol
-          name="chevron.right"
-          size={18}
-          tintColor={colors.subtext}
-          fallback="›"
-        />
       </Pressable>
-    </View>
+    </Animated.View>
   );
 }
 
 export default function BranchScreen({ navigation }) {
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
   const setSelectedBranch = useAppStore((state) => state.setSelectedBranch);
+  const compactLayout = layout.width < 390;
+  const listColumns = layout.width >= 720 ? 3 : layout.width >= 360 ? 2 : 1;
+  const cardGap = spacing.md;
+  const cardWidth =
+    listColumns === 1
+      ? Math.min(layout.contentMaxWidth, layout.width - layout.horizontalPadding * 2)
+      : Math.floor(
+          (layout.width - layout.horizontalPadding * 2 - cardGap * (listColumns - 1)) /
+            listColumns
+        );
 
   const [branches, setBranches] = useState([]);
   const [semesterCountMap, setSemesterCountMap] = useState({});
@@ -215,28 +240,25 @@ export default function BranchScreen({ navigation }) {
     }, [loadBranches])
   );
 
-  const normalizedQuery = query.trim().toLowerCase();
   const filteredBranches = useMemo(() => {
-    if (!normalizedQuery) {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
       return branches;
     }
 
-    return branches.filter((branch) =>
-      branch.name?.toLowerCase().includes(normalizedQuery)
-    );
-  }, [branches, normalizedQuery]);
-
-  const gridColumns = layout.width >= 390 ? 2 : 1;
-  const contentWidth = Math.min(
-    layout.width - layout.horizontalPadding * 2,
-    layout.contentMaxWidth
-  );
-  const gridGap = 14;
-  const columnWidth =
-    gridColumns === 2 ? Math.floor((contentWidth - gridGap) / 2) : contentWidth;
+    return branches.filter((branch) => branch.name?.toLowerCase().includes(normalized));
+  }, [branches, query]);
 
   if (loading) {
-    return <LoadingState label="Loading branches..." />;
+    return (
+      <PageSkeleton
+        titleWidth="38%"
+        subtitleWidth="66%"
+        withSearchBar
+        rows={4}
+        rowHeight={92}
+      />
+    );
   }
 
   if (error) {
@@ -249,22 +271,12 @@ export default function BranchScreen({ navigation }) {
     );
   }
 
-  if (!branches.length) {
-    return (
-      <EmptyState
-        title="No branches available"
-        subtitle="Ask the admin to add academic content first."
-      />
-    );
-  }
-
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
       <FlatList
-        key={gridColumns}
         data={filteredBranches}
         keyExtractor={(item) => item._id}
-        numColumns={gridColumns}
+        numColumns={listColumns}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -272,178 +284,83 @@ export default function BranchScreen({ navigation }) {
             tintColor={colors.primary}
           />
         }
-        columnWrapperStyle={gridColumns > 1 ? styles.columnWrapper : undefined}
         showsVerticalScrollIndicator={false}
-        style={{ width: "100%" }}
+        columnWrapperStyle={listColumns > 1 ? styles.columnWrapper : undefined}
         contentContainerStyle={[
           styles.content,
           {
             paddingHorizontal: layout.horizontalPadding,
-            paddingTop: 16,
-            paddingBottom: 34,
+            paddingBottom: spacing.xxxl,
           },
         ]}
         ListHeaderComponent={
-          <View
-            style={[
-              styles.headerArea,
-              { width: contentWidth },
-            ]}
-          >
-            <View style={styles.topRow}>
-              <View style={styles.brandRow}>
-                <View
-                  style={[
-                    styles.headerLogoCrop,
-                    {
-                      width: layout.isTablet ? 58 : 48,
-                      height: layout.isTablet ? 58 : 48,
-                    },
-                  ]}
-                >
-                  <Image
-                    source={HEADER_LOGO}
-                    resizeMode="cover"
-                    style={[
-                      styles.headerLogoImage,
-                      {
-                        width: layout.isTablet ? 112 : 96,
-                        height: layout.isTablet ? 74 : 64,
-                      },
-                    ]}
-                  />
-                </View>
-                <Text
-                  style={[
-                    styles.brandText,
-                    {
-                      color: colors.text,
-                      fontSize: layout.isTablet ? 30 : layout.isSmallPhone ? 23 : 27,
-                    },
-                  ]}
-                >
-                  <Text style={{ color: colors.text }}>Exam</Text>
-                  <Text style={{ color: "#ff7a1b" }}>Pulse</Text>
-                </Text>
-              </View>
-
-              <Pressable
-                onPress={() => navigation.navigate("BookmarksTab")}
-                style={({ pressed }) => [
-                  styles.notificationButton,
-                  {
-                    backgroundColor: colors.card,
-                    borderColor: colors.border,
-                    shadowColor: colors.shadow,
-                  },
-                  pressed ? styles.pressedCard : null,
-                ]}
-              >
-                <BrowseSymbol
-                  name="bell"
-                  size={22}
-                  tintColor={colors.text}
-                  fallback="◌"
-                />
-                <View style={styles.notificationDot} />
-              </Pressable>
-            </View>
-
-            <Text style={[styles.pageTitle, { color: colors.text }]}>Browse</Text>
-            <Text style={[styles.pageSubtitle, { color: colors.subtext }]}>
+          <View style={[styles.header, { maxWidth: layout.contentMaxWidth }]}>
+            <AppBrandHeader />
+            <Text style={[styles.title, { color: colors.text }]}>Browse</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
               Explore branches and start your preparation
             </Text>
 
             <View
               style={[
-                styles.searchWrap,
+                styles.searchBar,
+                shadows.card,
                 {
-                  backgroundColor: colors.card,
+                  backgroundColor: colors.surface,
                   borderColor: colors.border,
-                  shadowColor: colors.shadow,
                 },
               ]}
             >
-              <BrowseSymbol
-                name="magnifyingglass"
-                size={22}
-                tintColor={colors.subtext}
-                fallback="⌕"
-              />
+              <Ionicons name="search-outline" size={20} color={colors.textTertiary} />
               <TextInput
                 value={query}
                 onChangeText={setQuery}
                 placeholder="Search for branches..."
-                placeholderTextColor={isDark ? "#7f91aa" : "#8b98ad"}
+                placeholderTextColor={colors.textTertiary}
                 style={[styles.searchInput, { color: colors.text }]}
               />
             </View>
 
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              Choose your branch
+            <SectionHeader title="Choose your branch" />
+            <Text style={[styles.sectionHint, { color: colors.textSecondary }]}>
+              Select your branch to continue to semesters and subjects.
             </Text>
-          </View>
-        }
-        ListFooterComponent={
-          <View
-            style={[
-              styles.footerCard,
-              {
-                backgroundColor: colors.surfaceSoft,
-                borderColor: colors.border,
-                shadowColor: colors.shadow,
-                width: contentWidth,
-              },
-            ]}
-          >
-            <View style={styles.footerIconWrap}>
-              <BrowseSymbol
-                name="clipboard.fill"
-                size={30}
-                tintColor={colors.primary}
-                fallback="▤"
-              />
-            </View>
-            <View style={styles.footerBody}>
-              <Text style={[styles.footerTitle, { color: colors.primary }]}>
-                All semesters covered
-              </Text>
-              <Text style={[styles.footerText, { color: colors.subtext }]}>
-                Complete study materials, PYQs, notes, concepts and more.
-              </Text>
-            </View>
-            <BrowseSymbol
-              name="chevron.right"
-              size={20}
-              tintColor={colors.primary}
-              fallback="›"
-            />
           </View>
         }
         ListEmptyComponent={
           <EmptyState
+            icon="search-outline"
             title="No matching branches"
-            subtitle="Try a different keyword to find your branch."
+            subtitle="Try another keyword to find your branch."
           />
         }
-        renderItem={({ item }) => {
-          const semesterCount = semesterCountMap[item._id] || 0;
-          const semesterLabel =
-            semesterCount > 0
-              ? `${semesterCount} Semester${semesterCount > 1 ? "s" : ""}`
-              : "No semesters yet";
+        renderItem={({ item, index }) => {
+          const count = semesterCountMap[item._id] || 0;
+          const hasSemesters = count > 0;
+          const semesterLabel = `${count} Semester${count > 1 ? "s" : ""}`;
 
           return (
-            <BranchCard
-              item={item}
-              colors={colors}
-              columnWidth={columnWidth}
-              semesterLabel={semesterLabel}
-              onPress={(branch) => {
-                setSelectedBranch(branch);
-                navigation.navigate("Semester", { branch });
-              }}
-            />
+            <View
+              style={[
+                styles.rowWrap,
+                {
+                  width: cardWidth,
+                  maxWidth: listColumns === 1 ? layout.contentMaxWidth : undefined,
+                },
+              ]}
+            >
+              <BranchRow
+                item={item}
+                semesterLabel={semesterLabel}
+                hasSemesters={hasSemesters}
+                index={index}
+                compactLayout={compactLayout}
+                onPress={(branch) => {
+                  setSelectedBranch(branch);
+                  navigation.navigate("Semester", { branch });
+                }}
+              />
+            </View>
           );
         }}
       />
@@ -456,177 +373,98 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    alignItems: "center",
+    paddingTop: spacing.md,
   },
-  headerArea: {
+  header: {
+    width: "100%",
+    marginBottom: spacing.lg,
     alignSelf: "center",
-    marginBottom: 18,
   },
-  topRow: {
+  title: {
+    fontSize: typography.display,
+    fontWeight: fontWeights.extrabold,
+    marginBottom: spacing.xxs,
+  },
+  subtitle: {
+    fontSize: typography.base,
+    lineHeight: 22,
+    marginBottom: spacing.md,
+  },
+  searchBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 18,
-  },
-  brandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-    minWidth: 0,
-  },
-  headerLogoCrop: {
-    overflow: "hidden",
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-  headerLogoImage: {
-    transform: [{ translateY: -2 }],
-  },
-  brandText: {
-    fontWeight: "900",
-    letterSpacing: -0.8,
-  },
-  notificationButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 18,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 2,
-    position: "relative",
-  },
-  notificationDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: "#ff6b2b",
-    position: "absolute",
-    top: 11,
-    right: 11,
-  },
-  pageTitle: {
-    fontSize: 34,
-    fontWeight: "800",
-    letterSpacing: -0.8,
-    marginBottom: 6,
-  },
-  pageSubtitle: {
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 18,
-  },
-  searchWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    height: 66,
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 1,
-    marginBottom: 22,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
   },
   searchInput: {
     flex: 1,
-    marginLeft: 12,
-    fontSize: 17,
-    fontWeight: "500",
+    marginLeft: spacing.sm,
+    fontSize: typography.base,
+    fontWeight: fontWeights.medium,
   },
-  sectionTitle: {
-    fontSize: 21,
-    fontWeight: "800",
-    marginBottom: 14,
+  sectionHint: {
+    fontSize: typography.sm,
+    lineHeight: 18,
+    marginTop: -spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  rowWrap: {
+    marginBottom: spacing.sm,
   },
   columnWrapper: {
     justifyContent: "space-between",
-    width: "100%",
-  },
-  branchWrap: {
-    marginBottom: 14,
+    marginBottom: spacing.sm,
   },
   branchCard: {
+    justifyContent: "space-between",
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderRadius: 24,
-    paddingHorizontal: 12,
-    paddingVertical: 16,
-    height: 126,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    minHeight: 138,
+  },
+  branchCardCompact: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    minHeight: 128,
+  },
+  branchTopRow: {
     flexDirection: "row",
     alignItems: "center",
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 2,
+    justifyContent: "space-between",
+    marginBottom: spacing.md,
   },
   branchIconWrap: {
-    width: 54,
-    height: 54,
-    borderRadius: 16,
+    width: 52,
+    height: 52,
+    borderRadius: radius.lg,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
-    flexShrink: 0,
   },
-  branchBody: {
-    flex: 1,
+  branchIconWrapCompact: {
+    width: 46,
+    height: 46,
+  },
+  branchTextWrap: {
     minWidth: 0,
-    paddingRight: 6,
   },
   branchTitle: {
-    fontWeight: "800",
+    fontSize: typography.base,
+    fontWeight: fontWeights.semibold,
     lineHeight: 20,
-    marginBottom: 5,
+    marginBottom: spacing.xxs,
+  },
+  branchTitleCompact: {
+    fontSize: typography.md,
   },
   branchSubtitle: {
-    fontWeight: "500",
+    fontSize: typography.sm,
+    fontWeight: fontWeights.medium,
   },
-  footerCard: {
-    width: "100%",
-    alignSelf: "center",
-    borderWidth: 1,
-    borderRadius: 28,
-    marginTop: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 1,
-  },
-  footerIconWrap: {
-    width: 58,
-    height: 58,
-    borderRadius: 18,
-    backgroundColor: "rgba(31,111,235,0.08)",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 16,
-  },
-  footerBody: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: 10,
-  },
-  footerTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  footerText: {
-    fontSize: 15,
-    lineHeight: 24,
-  },
-  pressedCard: {
-    opacity: 0.92,
-    transform: [{ scale: 0.985 }],
+  branchSubtitleCompact: {
+    fontSize: typography.xs,
   },
 });

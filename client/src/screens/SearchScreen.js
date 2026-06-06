@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  FlatList,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -8,32 +9,193 @@ import {
   TextInput,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 
 import { searchContent } from "../api/content";
-import { EmptyState, LoadingState } from "../components/ScreenState";
+import AppBrandHeader from "../components/AppBrandHeader";
+import AnimatedScreenView from "../components/AnimatedScreenView";
+import EmptyState from "../components/EmptyState";
+import QuestionCard from "../components/QuestionCard";
+import SectionHeader from "../components/SectionHeader";
+import SkeletonLoader from "../components/SkeletonLoader";
+import StatBadge from "../components/StatBadge";
+import StaggeredItem from "../components/StaggeredItem";
 import { useAppStore } from "../store/appStore";
+import { isPdfFile, openPdfExternally } from "../utils/fileResources";
 import { useResponsiveLayout } from "../utils/layout";
-import { useAppTheme } from "../utils/theme";
+import {
+  fontWeights,
+  radius,
+  shadows,
+  spacing,
+  typography,
+  useAppTheme,
+} from "../utils/theme";
+
+const RECENT_SEARCHES_KEY = "recentSearches";
+const POPULAR_TOPICS = [
+  "SQL",
+  "Normalization",
+  "TCP/IP",
+  "OS Scheduling",
+  "Deadlock",
+  "ER Model",
+];
+
+async function readRecentSearches() {
+  const raw = await AsyncStorage.getItem(RECENT_SEARCHES_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+async function saveRecentSearch(term) {
+  const current = await readRecentSearches();
+  const next = [term, ...current.filter((item) => item !== term)].slice(0, 6);
+  await AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
+  return next;
+}
+
+function SearchSkeleton({ colors }) {
+  return (
+    <View style={styles.resultsBlock}>
+      {[0, 1, 2, 3].map((item) => (
+        <View
+          key={item}
+          style={[
+            styles.skeletonCard,
+            {
+              backgroundColor: colors.surface,
+              borderColor: colors.borderLight,
+            },
+          ]}
+        >
+          <SkeletonLoader height={18} width="28%" borderRadius={radius.md} />
+          <SkeletonLoader
+            height={16}
+            width="82%"
+            borderRadius={radius.md}
+            style={{ marginTop: spacing.md }}
+          />
+          <SkeletonLoader
+            height={16}
+            width="64%"
+            borderRadius={radius.md}
+            style={{ marginTop: spacing.xs }}
+          />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function SearchChip({ icon, label, onPress, colors, variant = "surface" }) {
+  const isPrimary = variant === "primary";
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.topicChip,
+        {
+          backgroundColor: isPrimary ? colors.primaryLight : colors.surface,
+          borderColor: isPrimary ? colors.primaryLight : colors.border,
+          transform: [{ scale: pressed ? 0.98 : 1 }],
+        },
+      ]}
+    >
+      <Ionicons
+        name={icon}
+        size={16}
+        color={isPrimary ? colors.primary : colors.textSecondary}
+      />
+      <Text
+        style={[
+          styles.topicChipText,
+          { color: isPrimary ? colors.primaryDark : colors.text },
+        ]}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function ResultCard({ icon, iconTint, title, subtitle, badge, onPress }) {
+  const { colors } = useAppTheme();
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.resultCard,
+        shadows.card,
+        {
+          backgroundColor: colors.surface,
+          borderColor: colors.borderLight,
+          transform: [{ scale: pressed ? 0.985 : 1 }],
+        },
+      ]}
+    >
+      <View style={[styles.resultIconWrap, { backgroundColor: iconTint.background }]}>
+        <Ionicons name={icon} size={20} color={iconTint.color} />
+      </View>
+
+      <View style={styles.resultBody}>
+        <Text numberOfLines={1} style={[styles.resultTitle, { color: colors.text }]}>
+          {title}
+        </Text>
+        <Text numberOfLines={2} style={[styles.resultSubtitle, { color: colors.textSecondary }]}>
+          {subtitle}
+        </Text>
+      </View>
+
+      <View style={styles.resultRight}>
+        {badge ? <StatBadge label={badge} color="accent" /> : null}
+        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+      </View>
+    </Pressable>
+  );
+}
 
 export default function SearchScreen({ navigation }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
   const selectedBranch = useAppStore((state) => state.selectedBranch);
   const selectedSemester = useAppStore((state) => state.selectedSemester);
-  const contextHydrated = useAppStore((state) => state.hydrated);
+
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [recentSearches, setRecentSearches] = useState([]);
   const [results, setResults] = useState({
     questions: [],
     concepts: [],
     notes: [],
   });
 
+  useFocusEffect(
+    useCallback(() => {
+      readRecentSearches().then(setRecentSearches).catch(() => setRecentSearches([]));
+    }, [])
+  );
+
   useEffect(() => {
-    if (!query.trim() || !selectedBranch?._id || !selectedSemester?._id) {
-      setResults({ questions: [], concepts: [], notes: [] });
+    const normalized = query.trim();
+
+    if (normalized.length < 2) {
+      setLoading(false);
       setError("");
+      setResults({ questions: [], concepts: [], notes: [] });
       return;
     }
 
@@ -42,171 +204,352 @@ export default function SearchScreen({ navigation }) {
         setLoading(true);
         setError("");
         const data = await searchContent({
-          q: query.trim(),
-          branchId: selectedBranch._id,
-          semesterId: selectedSemester._id,
+          q: normalized,
+          branchId: selectedBranch?._id,
+          semesterId: selectedSemester?._id,
         });
         setResults(data);
+        const nextRecent = await saveRecentSearch(normalized);
+        setRecentSearches(nextRecent);
       } catch (loadError) {
         setError(loadError.response?.data?.message || "Search failed.");
       } finally {
         setLoading(false);
       }
-    }, 350);
+    }, 300);
 
     return () => clearTimeout(timeoutId);
   }, [query, selectedBranch, selectedSemester]);
 
-  const missingContext = !selectedBranch?._id || !selectedSemester?._id;
-  const hasResults =
-    results.questions.length || results.concepts.length || results.notes.length;
+  const hasResults = useMemo(
+    () =>
+      results.questions.length > 0 ||
+      results.concepts.length > 0 ||
+      results.notes.length > 0,
+    [results]
+  );
 
-  if (!contextHydrated) {
-    return <LoadingState label="Loading search context..." />;
-  }
+  const applySearch = (value) => {
+    setQuery(value);
+  };
+
+  const contextText =
+    selectedBranch?.name && selectedSemester?.number
+      ? `Search is global. Context boost: ${selectedBranch.name} • Semester ${selectedSemester.number}`
+      : "Search questions, concepts, and notes across the full library";
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
-      <View
-        style={[
-          styles.header,
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.content,
           {
             paddingHorizontal: layout.horizontalPadding,
-            alignSelf: "center",
-            width: "100%",
-            maxWidth: layout.contentMaxWidth,
+            paddingTop: spacing.md,
+            paddingBottom: spacing.xxxl,
+            alignItems: "center",
           },
         ]}
       >
-        <TextInput
-          onChangeText={setQuery}
-          placeholder="Search questions, concepts, notes"
-          placeholderTextColor="#7b879d"
-          style={[
-            styles.input,
-            {
-              backgroundColor: colors.card,
-              borderColor: colors.border,
-              color: colors.text,
-            },
-          ]}
-          value={query}
-        />
-        <Text style={[styles.context, { color: colors.subtext }]}>
-          {selectedBranch?.name && selectedSemester?.number
-            ? `${selectedBranch.name} • Semester ${selectedSemester.number}`
-            : "Choose a branch and semester from Browse first"}
-        </Text>
-      </View>
+        <AnimatedScreenView style={[styles.container, { maxWidth: layout.contentMaxWidth }]}>
+          <View style={styles.header}>
+            <AppBrandHeader />
+            <Text style={[styles.title, { color: colors.text }]}>Search</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Find PYQs, concepts, and notes instantly.
+            </Text>
+          </View>
 
-      {loading ? <LoadingState label="Searching..." /> : null}
+          <View
+            style={[
+              styles.searchShell,
+              shadows.card,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.borderLight,
+              },
+            ]}
+          >
+            <Ionicons name="search-outline" size={22} color={colors.textTertiary} />
+            <TextInput
+              autoFocus
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search topics, subjects, or keywords"
+              placeholderTextColor={colors.textTertiary}
+              style={[styles.searchInput, { color: colors.text }]}
+            />
+            {query.length ? (
+              <Pressable onPress={() => setQuery("")} hitSlop={8}>
+                <Ionicons name="close-circle" size={20} color={colors.textTertiary} />
+              </Pressable>
+            ) : null}
+          </View>
 
-      {!loading && missingContext ? (
-        <View style={styles.info}>
-          <Text style={[styles.infoText, { color: colors.subtext }]}>
-            Search is filtered by your selected branch and semester.
+          <Text style={[styles.contextText, { color: colors.textSecondary }]}>
+            {contextText}
           </Text>
-        </View>
-      ) : null}
 
-      {!loading && !missingContext && error ? (
-        <View style={styles.info}>
-          <Text style={[styles.infoText, { color: colors.dangerText }]}>{error}</Text>
-        </View>
-      ) : null}
+          {!query.trim() ? (
+            <>
+              {recentSearches.length ? (
+                <View style={styles.sectionBlock}>
+                  <SectionHeader title="Recent Searches" />
+                  <View style={styles.chipWrap}>
+                    {recentSearches.map((item) => (
+                      <SearchChip
+                        key={item}
+                        icon="time-outline"
+                        label={item}
+                        onPress={() => applySearch(item)}
+                        colors={colors}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
 
-      {!loading && !missingContext ? (
-        <ScrollView contentContainerStyle={styles.results}>
-          <ResultGroup
-            items={results.questions}
-            onPress={(item) => navigation.navigate("QuestionDetail", { question: item })}
-            title="Questions"
-          />
-          <ResultGroup
-            items={results.concepts}
-            onPress={(item) => navigation.navigate("ConceptDetail", { concept: item })}
-            title="Concepts"
-          />
-          <ResultGroup
-            items={results.notes}
-            onPress={(item) =>
-              navigation.navigate("WebViewer", { title: item.title, url: item.fileUrl })
-            }
-            title="Notes"
-          />
-          {!hasResults && query.trim() && !error ? (
+              <View style={styles.sectionBlock}>
+                <SectionHeader title="Popular Topics" />
+                <View style={styles.chipWrap}>
+                  {POPULAR_TOPICS.map((item) => (
+                    <SearchChip
+                      key={item}
+                      icon="trending-up-outline"
+                      label={item}
+                      onPress={() => applySearch(item)}
+                      colors={colors}
+                      variant="primary"
+                    />
+                  ))}
+                </View>
+              </View>
+            </>
+          ) : null}
+
+          {loading ? <SearchSkeleton colors={colors} /> : null}
+
+          {!loading && error ? (
             <EmptyState
-              title="No search results"
-              subtitle="Try a different keyword or browse a different branch and semester."
+              icon="alert-circle-outline"
+              title="Search failed"
+              subtitle={error}
             />
           ) : null}
-        </ScrollView>
-      ) : null}
+
+          {!loading && query.trim().length >= 2 && !error ? (
+            <View style={styles.resultsBlock}>
+              {results.questions.length ? (
+                <View style={styles.sectionBlock}>
+                  <SectionHeader title={`Questions (${results.questions.length})`} />
+                  {results.questions.map((item) => (
+                    <QuestionCard
+                      key={item._id}
+                      question={item}
+                      onPress={() => navigation.navigate("QuestionDetail", { question: item })}
+                      style={{ marginBottom: spacing.md }}
+                      showContext
+                    />
+                  ))}
+                </View>
+              ) : null}
+
+              {results.concepts.length ? (
+                <View style={styles.sectionBlock}>
+                  <SectionHeader title={`Concepts (${results.concepts.length})`} />
+                  {results.concepts.map((item, index) => (
+                    <StaggeredItem key={item._id} index={index}>
+                      <ResultCard
+                        icon="bulb-outline"
+                        iconTint={{
+                          background: colors.accentLight,
+                          color: colors.accent,
+                        }}
+                        title={item.title}
+                        subtitle={
+                          [item.subjectName, item.moduleTitle].filter(Boolean).join(" • ") ||
+                          item.explanation
+                        }
+                        onPress={() => navigation.navigate("ConceptDetail", { concept: item })}
+                      />
+                    </StaggeredItem>
+                  ))}
+                </View>
+              ) : null}
+
+              {results.notes.length ? (
+                <View style={styles.sectionBlock}>
+                  <SectionHeader title={`Notes (${results.notes.length})`} />
+                  {results.notes.map((item, index) => (
+                    <StaggeredItem key={item._id} index={index}>
+                      <ResultCard
+                        icon="document-text-outline"
+                        iconTint={{
+                          background: colors.successLight,
+                          color: colors.success,
+                        }}
+                        title={item.title}
+                        subtitle={[item.type, item.subjectName, item.moduleTitle]
+                          .filter(Boolean)
+                          .join(" • ")}
+                        badge={item.type}
+                        onPress={async () => {
+                          if (isPdfFile({ url: item.fileUrl, fileName: item.title })) {
+                            await openPdfExternally(item.fileUrl);
+                            return;
+                          }
+
+                          navigation.navigate("WebViewer", {
+                            title: item.title,
+                            subtitle: item.type,
+                            url: item.fileUrl,
+                          });
+                        }}
+                      />
+                    </StaggeredItem>
+                  ))}
+                </View>
+              ) : null}
+
+              {!hasResults ? (
+                <>
+                  <EmptyState
+                    icon="search-outline"
+                    title={`No results for "${query.trim()}"`}
+                    subtitle="Try searching for a topic, subject, or keyword."
+                  />
+                  <View style={styles.sectionBlock}>
+                    <SectionHeader title="Try Popular Topics" />
+                    <View style={styles.chipWrap}>
+                      {POPULAR_TOPICS.map((item) => (
+                        <SearchChip
+                          key={item}
+                          icon="trending-up-outline"
+                          label={item}
+                          onPress={() => applySearch(item)}
+                          colors={colors}
+                          variant="primary"
+                        />
+                      ))}
+                    </View>
+                  </View>
+                </>
+              ) : null}
+            </View>
+          ) : null}
+        </AnimatedScreenView>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-function ResultGroup({ title, items, onPress }) {
-  const { colors } = useAppTheme();
-
-  if (!items.length) {
-    return null;
-  }
-
-  return (
-    <View style={styles.group}>
-      <Text style={[styles.groupTitle, { color: colors.text }]}>{title}</Text>
-      {items.map((item) => (
-        <Pressable
-          key={item._id}
-          onPress={() => onPress(item)}
-          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
-        >
-          <Text style={[styles.cardTitle, { color: colors.text }]}>
-            {item.questionText || item.title}
-          </Text>
-          <Text numberOfLines={2} style={[styles.cardSubtitle, { color: colors.subtext }]}>
-            {item.solutionText || item.explanation || item.type}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  header: { paddingTop: 16 },
-  input: {
+  safeArea: {
+    flex: 1,
+  },
+  content: {
+    width: "100%",
+  },
+  container: {
+    width: "100%",
+  },
+  header: {
+    marginBottom: spacing.lg,
+  },
+  title: {
+    fontSize: typography.display,
+    fontWeight: fontWeights.extrabold,
+  },
+  subtitle: {
+    marginTop: spacing.xs,
+    fontSize: typography.base,
+    fontWeight: fontWeights.medium,
+    lineHeight: 22,
+  },
+  searchShell: {
     borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-  },
-  context: {
-    marginTop: 10,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  info: { paddingHorizontal: 16, paddingTop: 20 },
-  infoText: { fontSize: 15, lineHeight: 22 },
-  results: {
-    paddingHorizontal: 16,
-    paddingTop: 0,
-    paddingBottom: 28,
-    gap: 18,
+    borderRadius: radius.xl,
+    minHeight: 56,
+    paddingHorizontal: spacing.md,
+    flexDirection: "row",
     alignItems: "center",
   },
-  group: { gap: 10 },
-  groupTitle: { fontSize: 18, fontWeight: "800" },
-  card: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 16,
-    width: "100%",
-    maxWidth: 920,
+  searchInput: {
+    flex: 1,
+    marginHorizontal: spacing.sm,
+    fontSize: typography.base,
+    fontWeight: fontWeights.medium,
   },
-  cardTitle: { fontSize: 16, fontWeight: "700", marginBottom: 6 },
-  cardSubtitle: { lineHeight: 20 },
+  contextText: {
+    marginTop: spacing.sm,
+    fontSize: typography.md,
+    lineHeight: 20,
+  },
+  sectionBlock: {
+    width: "100%",
+    marginTop: spacing.xl,
+  },
+  chipWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  topicChip: {
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  topicChipText: {
+    fontSize: typography.md,
+    fontWeight: fontWeights.semibold,
+  },
+  resultsBlock: {
+    width: "100%",
+    marginTop: spacing.lg,
+  },
+  skeletonCard: {
+    borderWidth: 1,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  resultCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    padding: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  resultIconWrap: {
+    width: 46,
+    height: 46,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  resultBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  resultTitle: {
+    fontSize: typography.base,
+    fontWeight: fontWeights.bold,
+    marginBottom: spacing.xxs,
+  },
+  resultSubtitle: {
+    fontSize: typography.md,
+    lineHeight: 20,
+  },
+  resultRight: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+    gap: spacing.xs,
+  },
 });

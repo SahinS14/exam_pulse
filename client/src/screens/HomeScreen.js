@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
-  Image,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -10,74 +9,68 @@ import {
   Text,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
-import { SymbolView } from "expo-symbols";
+import Svg, { Circle } from "react-native-svg";
 
-import { getRecentUpdates } from "../api/content";
-import { ErrorState } from "../components/ScreenState";
+import { getBookmarks, getRecentUpdates } from "../api/content";
+import { getNotificationsUnreadCount } from "../api/notifications";
+import AppBrandHeader from "../components/AppBrandHeader";
+import SectionHeader from "../components/SectionHeader";
+import SkeletonLoader from "../components/SkeletonLoader";
+import StatBadge from "../components/StatBadge";
+import Toast from "../components/Toast";
+import { ErrorState, EmptyState } from "../components/ScreenState";
 import { useAppStore } from "../store/appStore";
 import { useAuthStore } from "../store/authStore";
+import { useNotificationStore } from "../store/notificationStore";
 import { useResponsiveLayout } from "../utils/layout";
-import { useAppTheme } from "../utils/theme";
+import {
+  fontWeights,
+  radius,
+  shadows,
+  spacing,
+  typography,
+  useAppTheme,
+} from "../utils/theme";
+import { isPdfFile, openPdfExternally } from "../utils/fileResources";
 
-const HEADER_LOGO = require("../../assets/images/exampulse.png");
+const STREAK_KEY = "homeStudyStreak";
+const LAST_ACTIVITY_KEY = "lastStudyActivity";
+const EXPLORED_SUBJECTS_KEY = "exploredSubjectIds";
 
-const QUICK_ACCESS_ITEMS = [
+const QUICK_ACCESS = [
   {
     key: "mostRepeated",
-    title: "Most Repeated Questions",
-    icon: "flame.circle.fill",
-    fallback: "🔥",
-    tint: "#ff7c1f",
-    background: "#fff2e6",
+    title: "Most Repeated",
+    icon: "repeat-outline",
+    color: "#4F46E5",
+    bg: "#EEF2FF",
   },
   {
     key: "concepts",
     title: "Important Concepts",
-    icon: "lightbulb.max.fill",
-    fallback: "✦",
-    tint: "#7a52ff",
-    background: "#f3efff",
+    icon: "bulb-outline",
+    color: "#F59E0B",
+    bg: "#FEF3C7",
   },
   {
     key: "notes",
     title: "Notes",
-    icon: "book.closed.fill",
-    fallback: "▥",
-    tint: "#18b86a",
-    background: "#ebfbf2",
+    icon: "document-text-outline",
+    color: "#10B981",
+    bg: "#D1FAE5",
   },
   {
     key: "topRevision",
-    title: "Top Revision Questions",
-    icon: "star.square.fill",
-    fallback: "★",
-    tint: "#f6b100",
-    background: "#fff8e7",
+    title: "Top Revision",
+    icon: "star-outline",
+    color: "#7C3AED",
+    bg: "#EDE9FE",
   },
 ];
-
-function HomeSymbol({ name, size, tintColor, fallback }) {
-  return (
-    <SymbolView
-      name={name}
-      size={size}
-      tintColor={tintColor}
-      fallback={
-        <Text
-          style={{
-            color: tintColor,
-            fontSize: size * 0.72,
-            fontWeight: "700",
-            textAlign: "center",
-          }}
-        >
-          {fallback}
-        </Text>
-      }
-    />
-  );
-}
 
 function formatRelativeDate(value) {
   if (!value) {
@@ -85,17 +78,16 @@ function formatRelativeDate(value) {
   }
 
   const timestamp = new Date(value).getTime();
-
   if (Number.isNaN(timestamp)) {
     return "Recently";
   }
 
   const diffMs = Date.now() - timestamp;
-  const minutes = Math.max(1, Math.floor(diffMs / (60 * 1000)));
-  const hours = Math.floor(minutes / 60);
+  const hours = Math.floor(diffMs / (60 * 60 * 1000));
   const days = Math.floor(hours / 24);
 
-  if (minutes < 60) {
+  if (hours < 1) {
+    const minutes = Math.max(1, Math.floor(diffMs / (60 * 1000)));
     return `${minutes}m ago`;
   }
 
@@ -110,32 +102,15 @@ function formatRelativeDate(value) {
   return `${days}d ago`;
 }
 
-function useAnimatedPress() {
-  const scale = useRef(new Animated.Value(1)).current;
-
-  const onPressIn = useCallback(() => {
-    Animated.spring(scale, {
-      toValue: 0.975,
-      friction: 8,
-      tension: 180,
-      useNativeDriver: true,
-    }).start();
-  }, [scale]);
-
-  const onPressOut = useCallback(() => {
-    Animated.spring(scale, {
-      toValue: 1,
-      friction: 8,
-      tension: 180,
-      useNativeDriver: true,
-    }).start();
-  }, [scale]);
-
-  return {
-    animatedStyle: { transform: [{ scale }] },
-    onPressIn,
-    onPressOut,
-  };
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) {
+    return "Good Morning";
+  }
+  if (hour < 17) {
+    return "Good Afternoon";
+  }
+  return "Good Evening";
 }
 
 function formatExpiryDate(value) {
@@ -144,7 +119,6 @@ function formatExpiryDate(value) {
   }
 
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) {
     return "Unavailable";
   }
@@ -156,1159 +130,222 @@ function formatExpiryDate(value) {
   });
 }
 
-function getGreetingPrefix() {
-  const hour = new Date().getHours();
+async function updateStreak() {
+  const today = new Date().toISOString().slice(0, 10);
+  const stored = await AsyncStorage.getItem(STREAK_KEY);
 
-  if (hour < 12) {
-    return "Good Morning";
+  if (!stored) {
+    const next = { count: 1, lastDate: today };
+    await AsyncStorage.setItem(STREAK_KEY, JSON.stringify(next));
+    return next.count;
   }
 
-  if (hour < 17) {
-    return "Good Afternoon";
+  const parsed = JSON.parse(stored);
+  if (parsed.lastDate === today) {
+    return parsed.count || 1;
   }
 
-  return "Good Evening";
+  const previous = new Date(parsed.lastDate);
+  const current = new Date(today);
+  const dayGap = Math.round((current - previous) / (24 * 60 * 60 * 1000));
+  const nextCount = dayGap === 1 ? (parsed.count || 0) + 1 : 1;
+  const next = { count: nextCount, lastDate: today };
+  await AsyncStorage.setItem(STREAK_KEY, JSON.stringify(next));
+  return next.count;
 }
 
-function ThemeToggleButton({ colors, isDark, onToggle }) {
-  const progress = useRef(new Animated.Value(isDark ? 1 : 0)).current;
-
-  useEffect(() => {
-    Animated.spring(progress, {
-      toValue: isDark ? 1 : 0,
-      friction: 8,
-      tension: 150,
-      useNativeDriver: true,
-    }).start();
-  }, [isDark, progress]);
-
-  const translateX = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [2, 28],
-  });
-
-  const moonOpacity = progress.interpolate({
-    inputRange: [0, 0.45, 1],
-    outputRange: [1, 0.25, 0],
-  });
-
-  const sunOpacity = progress.interpolate({
-    inputRange: [0, 0.55, 1],
-    outputRange: [0, 0.25, 1],
-  });
-
-  return (
-    <Pressable onPress={onToggle} style={({ pressed }) => [pressed ? styles.pressedButton : null]}>
-      <View
-        style={[
-          styles.themeToggle,
-          {
-            backgroundColor: isDark ? "#162640" : "#eef3ff",
-            borderColor: isDark ? "#264066" : "#d7e0f3",
-          },
-        ]}
-      >
-        <Animated.View style={[styles.themeIconLeft, { opacity: moonOpacity }]}>
-          <HomeSymbol
-            name="moon.stars.fill"
-            size={15}
-            tintColor={isDark ? "#7f92b2" : "#5d6f90"}
-            fallback="☾"
-          />
-        </Animated.View>
-        <Animated.View style={[styles.themeIconRight, { opacity: sunOpacity }]}>
-          <HomeSymbol
-            name="sun.max.fill"
-            size={15}
-            tintColor={isDark ? "#ffbf4f" : "#c67a15"}
-            fallback="☀"
-          />
-        </Animated.View>
-        <Animated.View
-          style={[
-            styles.themeKnob,
-            {
-              backgroundColor: isDark ? "#122a4f" : "#ffffff",
-              transform: [{ translateX }],
-            },
-          ]}
-        >
-          <HomeSymbol
-            name={isDark ? "sun.max.fill" : "moon.stars.fill"}
-            size={16}
-            tintColor={isDark ? "#ffbf4f" : "#15315e"}
-            fallback={isDark ? "☀" : "☾"}
-          />
-        </Animated.View>
-      </View>
-    </Pressable>
-  );
+async function getLastActivity() {
+  const raw = await AsyncStorage.getItem(LAST_ACTIVITY_KEY);
+  return raw ? JSON.parse(raw) : null;
 }
 
-function HeroIllustration({ size }) {
-  return (
-    <View style={[styles.heroIllustrationWrap, { width: size, height: size }]}>
-      <View style={styles.heroIllustrationHalo} />
-      <View style={[styles.heroOrb, styles.heroOrbLarge]} />
-      <View style={[styles.heroOrb, styles.heroOrbSmall]} />
-      <View style={styles.heroBadgeTop}>
-        <HomeSymbol
-          name="graduationcap.fill"
-          size={size * 0.22}
-          tintColor="#ffffff"
-          fallback="⌂"
-        />
-      </View>
-      <View style={styles.heroBadgeBottom}>
-        <HomeSymbol
-          name="books.vertical.fill"
-          size={size * 0.18}
-          tintColor="#102d64"
-          fallback="▥"
-        />
-      </View>
-      <View style={styles.heroSpark}>
-        <HomeSymbol
-          name="sparkles"
-          size={size * 0.12}
-          tintColor="#ffb14a"
-          fallback="✦"
-        />
-      </View>
-    </View>
-  );
+async function getExploredSubjectsCount() {
+  const raw = await AsyncStorage.getItem(EXPLORED_SUBJECTS_KEY);
+  if (!raw) {
+    return 0;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch (error) {
+    return 0;
+  }
 }
 
-function buildRecentFeed(recentUpdates) {
-  const questionItems = recentUpdates.questions.map((question) => ({
-    key: `question-${question._id}`,
+function buildRecentItems(recentUpdates) {
+  const questions = (recentUpdates.questions || []).map((question) => ({
+    id: `question-${question._id}`,
     type: "question",
     badge: "NEW QUESTION",
-    title:
-      question.tags?.[0] ||
-      question.markCategory ||
-      "New PYQ Added",
-    subtitle:
-      question.questionText?.trim()?.slice(0, 68) ||
-      "Question bank update",
+    title: question.tags?.[0] || question.markCategory || "Fresh PYQ added",
+    subtitle: question.questionText || "Question bank updated",
     timestamp: question.createdAt,
-    icon: "doc.text.fill",
-    fallback: "▤",
-    tint: "#18b86a",
-    background: "#ebfbf2",
+    icon: "help-circle-outline",
+    color: "#4F46E5",
+    bg: "#EEF2FF",
     payload: question,
   }));
 
-  const noteItems = recentUpdates.notes.map((note) => ({
-    key: `note-${note._id}`,
+  const notes = (recentUpdates.notes || []).map((note) => ({
+    id: `note-${note._id}`,
     type: "note",
-    badge: "NEW NOTES",
-    title: note.title || "New Notes Uploaded",
-    subtitle: note.title || note.type || "Study material update",
+    badge: "NEW NOTE",
+    title: note.title || "New note uploaded",
+    subtitle: note.type || "Study material updated",
     timestamp: note.uploadedAt || note.createdAt,
-    icon: "doc.richtext.fill",
-    fallback: "☰",
-    tint: "#7a52ff",
-    background: "#f3edff",
+    icon: "document-text-outline",
+    color: "#10B981",
+    bg: "#D1FAE5",
     payload: note,
   }));
 
-  return [...questionItems, ...noteItems]
+  return [...questions, ...notes]
     .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
-    .slice(0, 3);
+    .slice(0, 4);
 }
 
-function buildQuickAccessItems(recentUpdates) {
-  const repeatedCount = recentUpdates.questions.filter(
-    (question) => Number.isFinite(question.frequency) && question.frequency > 1
-  ).length;
-  const noteCount = recentUpdates.notes.length;
+function buildInsight(recentUpdates) {
+  const ranked = [...(recentUpdates.questions || [])]
+    .filter((item) => Number(item.frequency) > 0)
+    .sort((a, b) => Number(b.frequency) - Number(a.frequency))[0];
 
-  return QUICK_ACCESS_ITEMS.map((item) => {
-    if (item.key === "mostRepeated" && repeatedCount > 0) {
-      return {
-        ...item,
-        meta: `${repeatedCount} repeated`,
-      };
-    }
-
-    if (item.key === "notes" && noteCount > 0) {
-      return {
-        ...item,
-        meta: `${noteCount} recent files`,
-      };
-    }
-
-    return item;
-  });
-}
-
-function buildMotivationSubtitle({
-  selectedBranch,
-  selectedSemester,
-  recentUpdates,
-}) {
-  if (selectedBranch?.name && selectedSemester?.number) {
-    return `Let's continue your ${selectedBranch.name} Semester ${selectedSemester.number} preparation.`;
-  }
-
-  if (recentUpdates.questions.length) {
-    return "Fresh PYQs are waiting to sharpen your revision today.";
-  }
-
-  if (recentUpdates.notes.length) {
-    return "New notes have been added to keep your preparation moving.";
-  }
-
-  return "Stay consistent and make one strong study session count today.";
-}
-
-function buildSmartTip({ recentUpdates, selectedBranch, selectedSemester }) {
-  const rankedQuestion = [...recentUpdates.questions]
-    .filter((question) => Number.isFinite(question.frequency) && question.frequency > 0)
-    .sort((a, b) => (b.frequency || 0) - (a.frequency || 0))[0];
-
-  if (rankedQuestion) {
-    const label =
-      rankedQuestion.tags?.[0] ||
-      rankedQuestion.markCategory ||
-      rankedQuestion.questionText?.split(" ").slice(0, 3).join(" ");
+  if (ranked) {
+    const topic =
+      ranked.tags?.[0] ||
+      ranked.markCategory ||
+      ranked.questionText?.split(" ").slice(0, 3).join(" ");
 
     return {
-      title: "Exam Insight",
-      body: `Questions on ${label || "this topic"} appeared ${rankedQuestion.frequency} times in previous exams.`,
-      accent: "#2f74ff",
-      ctaLabel: "View Related Questions",
-      actionType: "questions",
+      message: `Questions on ${topic || "this topic"} appeared ${ranked.frequency} times in previous exams.`,
+      hasAction: true,
     };
   }
 
-  const latestNote = recentUpdates.notes[0];
-
+  const latestNote = recentUpdates.notes?.[0];
   if (latestNote) {
     return {
-      title: "Exam Insight",
-      body: `${latestNote.title} was uploaded recently. Use it as your next revision anchor.`,
-      accent: "#18b86a",
-      ctaLabel: "Open Latest Note",
-      actionType: "note",
+      message: `${latestNote.title || "Latest notes"} can be your next revision anchor.`,
+      hasAction: false,
     };
   }
 
   return {
-    title: "Exam Insight",
-    body: selectedBranch?.name && selectedSemester?.number
-      ? `${selectedBranch.name} Semester ${selectedSemester.number} is ready. Start with one focused revision block today.`
-      : "Choose your branch and semester to unlock a more focused study path.",
-    accent: "#7a52ff",
-    ctaLabel: null,
-    actionType: null,
+    message: "Add subjects to see exam insights.",
+    hasAction: false,
   };
 }
 
-function getPremiumStatus({ isPaid, accessExpiry }) {
-  const hasExpiry = Boolean(accessExpiry);
-  const expiryTimestamp = hasExpiry ? new Date(accessExpiry).getTime() : 0;
-  const isActive = Boolean(isPaid) && hasExpiry && expiryTimestamp > Date.now();
-  const daysRemaining = isActive
-    ? Math.max(0, Math.ceil((expiryTimestamp - Date.now()) / (24 * 60 * 60 * 1000)))
-    : 0;
+function HomeLoading({ layout }) {
+  return (
+    <View>
+      <SkeletonLoader height={152} borderRadius={radius.xl} style={{ marginBottom: spacing.lg }} />
+      <View style={styles.streakRow}>
+        {[0, 1, 2].map((item) => (
+          <SkeletonLoader
+            key={item}
+            width="31%"
+            height={84}
+            borderRadius={radius.lg}
+            style={{ marginBottom: spacing.lg }}
+          />
+        ))}
+      </View>
+      <View style={styles.grid}>
+        {[0, 1, 2, 3].map((item) => (
+          <SkeletonLoader
+            key={item}
+            width={layout.width >= 390 ? "48%" : "100%"}
+            height={120}
+            borderRadius={radius.lg}
+            style={{ marginBottom: spacing.md }}
+          />
+        ))}
+      </View>
+      <SkeletonLoader height={120} borderRadius={radius.lg} style={{ marginBottom: spacing.lg }} />
+      <SkeletonLoader height={220} borderRadius={radius.xl} style={{ marginBottom: spacing.lg }} />
+    </View>
+  );
+}
 
-  if (isActive) {
-    return {
-      title: "Access Active",
-      subtitle: "Your premium library is unlocked.",
-      dateLabel: formatExpiryDate(accessExpiry),
-      daysLabel: `${daysRemaining} Days`,
-      background: "#ecfbf2",
-      iconBackground: "#dcf8e8",
-      tint: "#16a34a",
-    };
-  }
+function CircularDaysRing({ daysRemaining, color }) {
+  const safeDays = Math.max(0, Math.min(daysRemaining, 365));
+  const size = 70;
+  const strokeWidth = 7;
+  const radiusValue = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radiusValue;
+  const progress = safeDays / 365;
+  const dashOffset = circumference * (1 - progress);
 
-  if (Boolean(isPaid) && hasExpiry) {
-    return {
-      title: "Access Expired",
-      subtitle: "Renew to continue using premium content.",
-      dateLabel: formatExpiryDate(accessExpiry),
-      daysLabel: "Renew now",
-      background: "#fff5e8",
-      iconBackground: "#ffe6bf",
-      tint: "#d97706",
-    };
-  }
+  return (
+    <View style={styles.ringWrap}>
+      <Svg width={size} height={size}>
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radiusValue}
+          stroke="rgba(255,255,255,0.22)"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radiusValue}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={dashOffset}
+          rotation="-90"
+          origin={`${size / 2}, ${size / 2}`}
+        />
+      </Svg>
+      <View style={styles.ringContent}>
+        <Text style={[styles.ringValue, { color }]}>{safeDays}</Text>
+        <Text style={styles.ringLabel}>Days Left</Text>
+      </View>
+    </View>
+  );
+}
 
-  return {
-    title: "Access Locked",
-    subtitle: "Upgrade to unlock the full exam library.",
-    dateLabel: "Renew now",
-    daysLabel: "Upgrade",
-    background: "#fff0f1",
-    iconBackground: "#ffe1e4",
-    tint: "#e11d48",
+function QuickAccessCard({ item, subtitle, onPress, wrapStyle }) {
+  const { colors } = useAppTheme();
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const animateTo = (value) => {
+    Animated.timing(scale, {
+      toValue: value,
+      duration: 100,
+      useNativeDriver: true,
+    }).start();
   };
-}
-
-function SectionHeader({ title, actionLabel, onPress, colors }) {
-  return (
-    <View style={styles.sectionHeader}>
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>{title}</Text>
-      {actionLabel ? (
-        <Pressable onPress={onPress}>
-          <Text style={[styles.sectionAction, { color: colors.primary }]}>
-            {actionLabel}
-          </Text>
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
-
-function CardSurface({ children, backgroundColor, borderColor, shadowColor, style }) {
-  return (
-    <View
-      style={[
-        styles.cardSurface,
-        {
-          backgroundColor,
-          borderColor,
-          shadowColor,
-        },
-        style,
-      ]}
-    >
-      {children}
-    </View>
-  );
-}
-
-function SkeletonBlock({ width, height, borderRadius, backgroundColor, style }) {
-  return (
-    <View
-      style={[
-        {
-          width,
-          height,
-          borderRadius,
-          backgroundColor,
-        },
-        style,
-      ]}
-    />
-  );
-}
-
-function HomeLoadingSkeleton({ colors, layout }) {
-  const isCompactPhone = layout.width < 390;
 
   return (
-    <View style={styles.dashboardSpacing}>
-      <View style={styles.greetingSection}>
-        <SkeletonBlock
-          width="58%"
-          height={isCompactPhone ? 18 : 20}
-          borderRadius={999}
-          backgroundColor={colors.border}
-          style={{ marginBottom: 12 }}
-        />
-        <SkeletonBlock
-          width="72%"
-          height={isCompactPhone ? 34 : 38}
-          borderRadius={16}
-          backgroundColor={colors.border}
-          style={{ marginBottom: 10 }}
-        />
-        <SkeletonBlock
-          width="64%"
-          height={16}
-          borderRadius={10}
-          backgroundColor={colors.border}
-        />
-      </View>
-
-      <CardSurface
-        backgroundColor={colors.card}
-        borderColor={colors.border}
-        shadowColor={colors.shadow}
-        style={[styles.heroCard, { minHeight: isCompactPhone ? 208 : 228 }]}
-      >
-        <SkeletonBlock
-          width="42%"
-          height={20}
-          borderRadius={12}
-          backgroundColor={colors.cardMuted}
-          style={{ marginBottom: 18 }}
-        />
-        <SkeletonBlock
-          width="52%"
-          height={44}
-          borderRadius={18}
-          backgroundColor={colors.cardMuted}
-          style={{ marginBottom: 12 }}
-        />
-        <SkeletonBlock
-          width="30%"
-          height={18}
-          borderRadius={10}
-          backgroundColor={colors.cardMuted}
-          style={{ marginBottom: 8 }}
-        />
-        <SkeletonBlock
-          width="34%"
-          height={18}
-          borderRadius={10}
-          backgroundColor={colors.cardMuted}
-          style={{ marginBottom: 22 }}
-        />
-        <SkeletonBlock
-          width={148}
-          height={52}
-          borderRadius={999}
-          backgroundColor="#ffffff"
-        />
-      </CardSurface>
-
-      <View style={styles.quickGrid}>
-        {Array.from({ length: 4 }).map((_, index) => (
-          <CardSurface
-            key={`skeleton-quick-${index}`}
-            backgroundColor={colors.card}
-            borderColor={colors.border}
-            shadowColor={colors.shadow}
-            style={styles.quickCard}
-          >
-            <SkeletonBlock
-              width={56}
-              height={56}
-              borderRadius={18}
-              backgroundColor={colors.cardMuted}
-              style={{ marginBottom: 18 }}
-            />
-            <SkeletonBlock
-              width="76%"
-              height={16}
-              borderRadius={10}
-              backgroundColor={colors.border}
-              style={{ marginBottom: 8 }}
-            />
-            <SkeletonBlock
-              width="54%"
-              height={16}
-              borderRadius={10}
-              backgroundColor={colors.border}
-            />
-          </CardSurface>
-        ))}
-      </View>
-
-      <CardSurface
-        backgroundColor={colors.card}
-        borderColor={colors.border}
-        shadowColor={colors.shadow}
-        style={styles.updatesCard}
-      >
-        {Array.from({ length: 3 }).map((_, index) => (
-          <View
-            key={`update-skeleton-${index}`}
-            style={[
-              styles.updateRow,
-              index < 2 && {
-                borderBottomWidth: StyleSheet.hairlineWidth,
-                borderBottomColor: colors.border,
-              },
-            ]}
-          >
-            <SkeletonBlock
-              width={54}
-              height={54}
-              borderRadius={18}
-              backgroundColor={colors.cardMuted}
-              style={{ marginRight: 14 }}
-            />
-            <View style={{ flex: 1 }}>
-              <SkeletonBlock
-                width="66%"
-                height={18}
-                borderRadius={10}
-                backgroundColor={colors.border}
-                style={{ marginBottom: 8 }}
-              />
-              <SkeletonBlock
-                width="48%"
-                height={15}
-                borderRadius={10}
-                backgroundColor={colors.border}
-              />
-            </View>
-            <SkeletonBlock
-              width={42}
-              height={14}
-              borderRadius={10}
-              backgroundColor={colors.border}
-            />
-          </View>
-        ))}
-      </CardSurface>
-
-      <CardSurface
-        backgroundColor={colors.card}
-        borderColor={colors.border}
-        shadowColor={colors.shadow}
-        style={styles.tipCard}
-      >
-        <SkeletonBlock
-          width={50}
-          height={50}
-          borderRadius={18}
-          backgroundColor={colors.cardMuted}
-          style={{ marginRight: 14 }}
-        />
-        <View style={{ flex: 1 }}>
-          <SkeletonBlock
-            width="34%"
-            height={18}
-            borderRadius={10}
-            backgroundColor={colors.border}
-            style={{ marginBottom: 10 }}
-          />
-          <SkeletonBlock
-            width="84%"
-            height={16}
-            borderRadius={10}
-            backgroundColor={colors.border}
-            style={{ marginBottom: 8 }}
-          />
-          <SkeletonBlock
-            width="64%"
-            height={16}
-            borderRadius={10}
-            backgroundColor={colors.border}
-          />
-        </View>
-      </CardSurface>
-
-      <CardSurface
-        backgroundColor={colors.card}
-        borderColor={colors.border}
-        shadowColor={colors.shadow}
-        style={styles.premiumCard}
-      >
-        <SkeletonBlock
-          width={56}
-          height={56}
-          borderRadius={18}
-          backgroundColor={colors.cardMuted}
-          style={{ marginRight: 14 }}
-        />
-        <View style={{ flex: 1 }}>
-          <SkeletonBlock
-            width="42%"
-            height={18}
-            borderRadius={10}
-            backgroundColor={colors.border}
-            style={{ marginBottom: 8 }}
-          />
-          <SkeletonBlock
-            width="58%"
-            height={15}
-            borderRadius={10}
-            backgroundColor={colors.border}
-          />
-        </View>
-        <SkeletonBlock
-          width={72}
-          height={28}
-          borderRadius={12}
-          backgroundColor={colors.border}
-        />
-      </CardSurface>
-    </View>
-  );
-}
-
-function HomeErrorPanel({ colors, subtitle, onRetry }) {
-  return (
-    <CardSurface
-      backgroundColor={colors.card}
-      borderColor={colors.border}
-      shadowColor={colors.shadow}
-      style={styles.errorCard}
-    >
-      <Text style={[styles.errorTitle, { color: colors.text }]}>
-        Unable to load your dashboard
-      </Text>
-      <Text style={[styles.errorSubtitle, { color: colors.subtext }]}>
-        {subtitle}
-      </Text>
+    <Animated.View style={[styles.quickCardWrap, wrapStyle, { transform: [{ scale }] }]}>
       <Pressable
-        onPress={onRetry}
-        style={[styles.errorButton, { backgroundColor: colors.primary }]}
-      >
-        <Text style={styles.errorButtonText}>Retry</Text>
-      </Pressable>
-    </CardSurface>
-  );
-}
-
-function HomeEmptyPanel({ colors }) {
-  return (
-    <CardSurface
-      backgroundColor={colors.card}
-      borderColor={colors.border}
-      shadowColor={colors.shadow}
-      style={styles.updatesCard}
-    >
-      <View style={styles.emptyPanel}>
-        <Text style={[styles.emptyTitle, { color: colors.text }]}>
-          No recent updates yet
-        </Text>
-        <Text style={[styles.emptySubtitle, { color: colors.subtext }]}>
-          Fresh PYQs and notes uploaded by the admin will appear here.
-        </Text>
-      </View>
-    </CardSurface>
-  );
-}
-
-function QuickAccessCard({ item, colors, width, onPress }) {
-  const { animatedStyle, onPressIn, onPressOut } = useAnimatedPress();
-
-  return (
-    <Animated.View style={[{ width }, animatedStyle]}>
-      <Pressable onPress={() => onPress(item)} onPressIn={onPressIn} onPressOut={onPressOut}>
-        <CardSurface
-          backgroundColor={colors.card}
-          borderColor={colors.border}
-          shadowColor={colors.shadow}
-          style={styles.quickCard}
-        >
-          <View
-            style={[
-              styles.quickIconWrap,
-              { backgroundColor: item.background },
-            ]}
-          >
-            <HomeSymbol
-              name={item.icon}
-              size={30}
-              tintColor={item.tint}
-              fallback={item.fallback}
-            />
-          </View>
-          <Text style={[styles.quickTitle, { color: colors.text }]}>
-            {item.title}
-          </Text>
-          {item.meta ? (
-            <Text style={[styles.quickMeta, { color: colors.subtext }]}>
-              {item.meta}
-            </Text>
-          ) : null}
-        </CardSurface>
-      </Pressable>
-    </Animated.View>
-  );
-}
-
-export function StudentHomeView({
-  colors,
-  isDark,
-  layout,
-  loading,
-  error,
-  refreshing,
-  userName,
-  userDisplayName,
-  greetingPrefix,
-  subtitle,
-  unreadCount,
-  continueData,
-  quickAccessItems,
-  recentFeed,
-  smartTip,
-  premiumStatus,
-  onRefresh,
-  onRetry,
-  onOpenBrowse,
-  onOpenNotifications,
-  onToggleTheme,
-  onOpenSearch,
-  onOpenSmartTip,
-  onOpenContinue,
-  onOpenQuickAccess,
-  onOpenRecentUpdates,
-  onOpenRecentUpdate,
-  onOpenPremium,
-  onLogout,
-}) {
-  const isCompactPhone = layout.width < 390;
-  const isNarrow = layout.width < 375;
-  const stackHero = isCompactPhone;
-  const stackPremium = layout.width < 400;
-  const heroIllustrationSize = layout.isTablet ? 132 : isNarrow ? 86 : 102;
-  const heroMinHeight = layout.isTablet ? 164 : isNarrow ? 146 : 154;
-  const cardGap = layout.isTablet ? 18 : 14;
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const profileInitial = (userDisplayName || userName || "S").trim().charAt(0).toUpperCase();
-
-  return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
-      <ScrollView
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.primary}
-          />
-        }
-        contentContainerStyle={[
-          styles.scrollContent,
+        onPress={() => onPress(item)}
+        onPressIn={() => animateTo(0.97)}
+        onPressOut={() => animateTo(1)}
+        style={[
+          styles.quickCard,
+          shadows.card,
           {
-            paddingHorizontal: layout.horizontalPadding,
-            paddingTop: layout.isTablet ? 22 : 14,
-            paddingBottom: layout.isTablet ? 40 : 30,
+            backgroundColor: colors.surface,
+            borderColor: colors.border,
           },
         ]}
       >
-        <View style={[styles.page, { maxWidth: layout.contentMaxWidth }]}>
-          {profileMenuOpen ? (
-            <Pressable
-              style={styles.profileMenuBackdrop}
-              onPress={() => setProfileMenuOpen(false)}
-            />
-          ) : null}
-          <View
-            style={[
-              styles.topBar,
-              { marginBottom: layout.isTablet ? 16 : 10, marginTop: 6 },
-            ]}
-          >
-            <View style={styles.headerBrand}>
-              <View
-                style={[
-                  styles.headerLogoCrop,
-                  {
-                    width: layout.isTablet ? 56 : isCompactPhone ? 46 : 50,
-                    height: layout.isTablet ? 56 : isCompactPhone ? 46 : 50,
-                    marginTop: layout.isTablet ? 2 : 4,
-                  },
-                ]}
-              >
-                <Image
-                  source={HEADER_LOGO}
-                  resizeMode="cover"
-                  style={[
-                    styles.headerLogoImage,
-                    {
-                      width: layout.isTablet ? 112 : isCompactPhone ? 94 : 102,
-                      height: layout.isTablet ? 74 : isCompactPhone ? 62 : 68,
-                    },
-                  ]}
-                />
-              </View>
-              <Text
-                style={[
-                  styles.headerBrandText,
-                  {
-                    color: colors.text,
-                    fontSize: layout.isTablet ? 30 : isCompactPhone ? 23 : 26,
-                  },
-                ]}
-              >
-                <Text style={{ color: colors.text }}>Exam</Text>
-                <Text style={{ color: "#ff7a1b" }}>Pulse</Text>
-              </Text>
-            </View>
-
-            <View style={styles.headerActions}>
-              <ThemeToggleButton
-                colors={colors}
-                isDark={isDark}
-                onToggle={onToggleTheme}
-              />
-
-              <Pressable
-                onPress={onOpenNotifications}
-                style={({ pressed }) => [
-                  styles.headerButton,
-                  {
-                    backgroundColor: colors.card,
-                    borderColor: colors.border,
-                    shadowColor: colors.shadow,
-                  },
-                  pressed ? styles.pressedButton : null,
-                ]}
-              >
-                <HomeSymbol
-                  name="bell"
-                  size={20}
-                  tintColor={colors.text}
-                  fallback="◌"
-                />
-                {unreadCount > 0 ? (
-                  <View style={styles.notificationBadge}>
-                    <Text style={styles.notificationBadgeText}>
-                      {unreadCount > 9 ? "9+" : unreadCount}
-                    </Text>
-                  </View>
-                ) : null}
-              </Pressable>
-
-              <View style={styles.profileMenuAnchor}>
-                <Pressable
-                  onPress={() => setProfileMenuOpen((current) => !current)}
-                  style={({ pressed }) => [
-                    styles.profileButton,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: colors.border,
-                      shadowColor: colors.shadow,
-                    },
-                    pressed ? styles.pressedButton : null,
-                  ]}
-                >
-                  <Text style={[styles.profileInitial, { color: colors.text }]}>
-                    {profileInitial}
-                  </Text>
-                </Pressable>
-
-                {profileMenuOpen ? (
-                  <View
-                    style={[
-                      styles.profileMenu,
-                      {
-                        backgroundColor: colors.card,
-                        borderColor: colors.border,
-                        shadowColor: colors.shadow,
-                      },
-                    ]}
-                  >
-                    <Text style={[styles.profileMenuName, { color: colors.text }]}>
-                      {userDisplayName || userName}
-                    </Text>
-                    <Pressable
-                      onPress={async () => {
-                        setProfileMenuOpen(false);
-                        await onLogout();
-                      }}
-                      style={({ pressed }) => [
-                        styles.profileMenuLogout,
-                        {
-                          backgroundColor: isDark ? "#1b2942" : "#f3f7ff",
-                          borderColor: colors.border,
-                        },
-                        pressed ? styles.pressedButton : null,
-                      ]}
-                    >
-                      <Text style={[styles.profileMenuLogoutText, { color: colors.text }]}>
-                        Logout
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.greetingSection}>
-            <Text style={[styles.greetingKicker, { color: colors.subtext }]}>
-              {greetingPrefix}
-            </Text>
-            <Text
-              style={[
-                styles.greetingTitle,
-                {
-                  color: colors.text,
-                  fontSize: layout.isTablet ? 38 : isCompactPhone ? 29 : 34,
-                  lineHeight: layout.isTablet ? 44 : isCompactPhone ? 35 : 40,
-                },
-              ]}
-            >
-              {userName} 👋
-            </Text>
-            <Text style={[styles.greetingSubtitle, { color: colors.subtext }]}>
-              {subtitle}
-            </Text>
-          </View>
-
-          {loading ? (
-            <HomeLoadingSkeleton colors={colors} layout={layout} />
-          ) : (
-            <View style={styles.dashboardSpacing}>
-              <CardSurface
-                backgroundColor={isDark ? "#10275a" : "#0d2d72"}
-                borderColor={isDark ? "#1f447f" : "#123781"}
-                shadowColor={colors.shadow}
-                style={[styles.heroCard, { minHeight: heroMinHeight }]}
-              >
-                <View style={[styles.heroGlow, styles.heroGlowTop]} />
-                <View style={[styles.heroGlow, styles.heroGlowBottom]} />
-
-                <View
-                  style={[
-                    styles.heroCardContent,
-                    stackHero ? styles.heroCardContentCompact : null,
-                    { gap: cardGap },
-                  ]}
-                >
-                  <View style={styles.heroCopy}>
-                    <Text style={styles.heroEyebrow}>Continue Studying</Text>
-                    <Text numberOfLines={2} style={styles.heroHeadline}>
-                      {continueData.primary}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.heroMeta}>
-                      {continueData.secondary}
-                    </Text>
-                    <Text numberOfLines={2} style={styles.heroTopic}>
-                      {continueData.tertiary}
-                    </Text>
-                    <View
-                      style={[
-                        styles.progressTrack,
-                        {
-                          backgroundColor: "rgba(255,255,255,0.18)",
-                          width: stackHero ? "92%" : "76%",
-                        },
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.progressFill,
-                          {
-                            width: continueData.progressValue
-                              ? `${continueData.progressValue}%`
-                              : "28%",
-                          },
-                        ]}
-                      />
-                    </View>
-                    <Text style={styles.progressCaption}>
-                      {continueData.progressLabel}
-                    </Text>
-
-                    <Pressable
-                      onPress={onOpenContinue}
-                      style={({ pressed }) => [
-                        styles.heroButton,
-                        pressed ? styles.pressedButton : null,
-                      ]}
-                    >
-                      <Text style={styles.heroButtonText}>{continueData.ctaLabel}</Text>
-                      <HomeSymbol
-                        name="arrow.right"
-                        size={18}
-                        tintColor="#0d2d72"
-                        fallback="→"
-                      />
-                    </Pressable>
-                  </View>
-
-                  <HeroIllustration size={heroIllustrationSize} />
-                </View>
-              </CardSurface>
-
-              <SectionHeader title="Quick Access" colors={colors} />
-
-              <View style={styles.quickGrid}>
-                {quickAccessItems.map((item) => (
-                  <QuickAccessCard
-                    key={item.key}
-                    item={item}
-                    colors={colors}
-                    width={layout.isTablet ? "24%" : "48%"}
-                    onPress={onOpenQuickAccess}
-                  />
-                ))}
-              </View>
-
-              <SectionHeader
-                title="Recent Updates"
-                actionLabel="View All"
-                onPress={onOpenRecentUpdates}
-                colors={colors}
-              />
-
-              {error ? (
-                <HomeErrorPanel colors={colors} subtitle={error} onRetry={onRetry} />
-              ) : recentFeed.length ? (
-                <CardSurface
-                  backgroundColor={colors.card}
-                  borderColor={colors.border}
-                  shadowColor={colors.shadow}
-                  style={styles.updatesCard}
-                >
-                  {recentFeed.map((item, index) => (
-                    <Pressable
-                      key={item.key}
-                      onPress={() => onOpenRecentUpdate(item)}
-                      style={({ pressed }) => [
-                        styles.updateRow,
-                        index < recentFeed.length - 1 && {
-                          borderBottomWidth: StyleSheet.hairlineWidth,
-                          borderBottomColor: colors.border,
-                        },
-                        pressed ? styles.pressedRow : null,
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.updateIconWrap,
-                          { backgroundColor: item.background },
-                        ]}
-                      >
-                        <HomeSymbol
-                          name={item.icon}
-                          size={24}
-                          tintColor={item.tint}
-                          fallback={item.fallback}
-                        />
-                      </View>
-
-                      <View style={styles.updateBody}>
-                        <View
-                          style={[
-                            styles.updateBadge,
-                            { backgroundColor: item.background },
-                          ]}
-                        >
-                          <Text style={[styles.updateBadgeText, { color: item.tint }]}>
-                            {item.badge}
-                          </Text>
-                        </View>
-                        <Text
-                          numberOfLines={2}
-                          style={[styles.updateTitle, { color: colors.text }]}
-                        >
-                          {item.title}
-                        </Text>
-                        <Text
-                          numberOfLines={2}
-                          style={[styles.updateSubtitle, { color: colors.subtext }]}
-                        >
-                          {item.subtitle}
-                        </Text>
-                      </View>
-
-                      <View style={styles.updateMeta}>
-                        <Text style={[styles.updateTime, { color: colors.subtext }]}>
-                          {formatRelativeDate(item.timestamp)}
-                        </Text>
-                        <HomeSymbol
-                          name="chevron.right"
-                          size={15}
-                          tintColor={colors.subtext}
-                          fallback="›"
-                        />
-                      </View>
-                    </Pressable>
-                  ))}
-                </CardSurface>
-              ) : (
-                <HomeEmptyPanel colors={colors} />
-              )}
-
-              <Pressable
-                onPress={smartTip.ctaLabel ? onOpenSmartTip : undefined}
-                style={({ pressed }) => [pressed ? styles.pressedCard : null]}
-              >
-                <CardSurface
-                  backgroundColor={isDark ? "#131f33" : "#eef5ff"}
-                  borderColor={colors.border}
-                  shadowColor={colors.shadow}
-                  style={[
-                    styles.tipCard,
-                    stackPremium ? styles.tipCardStacked : null,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.tipIconWrap,
-                      { backgroundColor: isDark ? "#1c2c47" : "#ddeaff" },
-                    ]}
-                  >
-                    <HomeSymbol
-                      name="scope"
-                      size={30}
-                      tintColor={smartTip.accent}
-                      fallback="◎"
-                    />
-                  </View>
-                  <View style={styles.tipBody}>
-                    <Text style={[styles.tipTitle, { color: colors.text }]}>
-                      {smartTip.title}
-                    </Text>
-                    <Text style={[styles.tipText, { color: colors.subtext }]}>
-                      {smartTip.body}
-                    </Text>
-                    {smartTip.ctaLabel ? (
-                      <Text style={[styles.tipLink, { color: colors.primary }]}>
-                        {smartTip.ctaLabel} →
-                      </Text>
-                    ) : null}
-                  </View>
-                </CardSurface>
-              </Pressable>
-
-              <Pressable
-                onPress={onOpenPremium}
-                style={({ pressed }) => [pressed ? styles.pressedCard : null]}
-              >
-                <CardSurface
-                  backgroundColor={premiumStatus.background}
-                  borderColor="transparent"
-                  shadowColor={colors.shadow}
-                  style={styles.premiumCard}
-                >
-                  <View
-                    style={[
-                      styles.premiumIconWrap,
-                      { backgroundColor: premiumStatus.iconBackground },
-                    ]}
-                  >
-                    <HomeSymbol
-                      name="checkmark.shield.fill"
-                      size={30}
-                      tintColor={premiumStatus.tint}
-                      fallback="✓"
-                    />
-                  </View>
-
-                  <View style={styles.premiumBody}>
-                    <Text style={[styles.premiumTitle, { color: premiumStatus.tint }]}>
-                      {premiumStatus.title}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.premiumSubtitle,
-                        { color: isDark ? "#a9bfd0" : "#45616b" },
-                      ]}
-                    >
-                      {premiumStatus.subtitle}
-                    </Text>
-                  </View>
-
-                  <View style={styles.premiumMeta}>
-                    <Text
-                      style={[
-                        styles.premiumMetaLabel,
-                        { color: isDark ? "#8ea1b4" : "#667886" },
-                      ]}
-                    >
-                      Valid Till
-                    </Text>
-                    <Text style={[styles.premiumMetaDate, { color: premiumStatus.tint }]}>
-                      {premiumStatus.dateLabel}
-                    </Text>
-                    <Text style={[styles.premiumDaysText, { color: premiumStatus.tint }]}>
-                      {premiumStatus.daysLabel}
-                    </Text>
-                  </View>
-                </CardSurface>
-              </Pressable>
-            </View>
-          )}
+        <View style={[styles.quickIconWrap, { backgroundColor: item.bg }]}>
+          <Ionicons name={item.icon} size={28} color={item.color} />
         </View>
-      </ScrollView>
-    </SafeAreaView>
+        <Text style={[styles.quickTitle, { color: colors.text }]}>{item.title}</Text>
+        {subtitle ? (
+          <Text style={[styles.quickSubtitle, { color: colors.textSecondary }]}>{subtitle}</Text>
+        ) : null}
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -1319,239 +356,705 @@ export default function HomeScreen({ navigation }) {
   const accessExpiry = useAuthStore((state) => state.accessExpiry);
   const isPaid = useAuthStore((state) => state.isPaid);
   const logout = useAuthStore((state) => state.logout);
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+  const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
   const selectedBranch = useAppStore((state) => state.selectedBranch);
   const selectedSemester = useAppStore((state) => state.selectedSemester);
-  const isAdmin = user?.role === "admin";
 
   const [recentUpdates, setRecentUpdates] = useState({ questions: [], notes: [] });
+  const [bookmarkCount, setBookmarkCount] = useState(0);
+  const [streakCount, setStreakCount] = useState(1);
+  const [exploredSubjectsCount, setExploredSubjectsCount] = useState(0);
+  const [lastActivity, setLastActivity] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const recentUpdatesRef = useRef(recentUpdates);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [toast, setToast] = useState({ message: "", type: "info" });
+  const entrance = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    recentUpdatesRef.current = recentUpdates;
-  }, [recentUpdates]);
+  const isAdmin = user?.role === "admin";
+
+  const animateEntrance = useCallback(() => {
+    entrance.setValue(0);
+    Animated.parallel([
+      Animated.timing(entrance, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [entrance]);
 
   const loadDashboard = useCallback(
     async (isRefresh = false) => {
       try {
-        const hasCachedContent =
-          recentUpdatesRef.current.questions.length > 0 ||
-          recentUpdatesRef.current.notes.length > 0;
-
+        setError("");
         if (isRefresh) {
           setRefreshing(true);
-        } else if (!hasCachedContent) {
+        } else {
           setLoading(true);
         }
 
+        const [streak, exploredCount, activity] = await Promise.all([
+          updateStreak(),
+          getExploredSubjectsCount(),
+          getLastActivity(),
+        ]);
+
+        setStreakCount(streak);
+        setExploredSubjectsCount(exploredCount);
+        setLastActivity(activity);
+
         if (isAdmin) {
           setRecentUpdates({ questions: [], notes: [] });
+          setBookmarkCount(0);
           return;
         }
 
-        const updates = await getRecentUpdates();
-        setRecentUpdates(updates);
-        setError("");
+        const [updates, bookmarks, unreadResponse] = await Promise.all([
+          getRecentUpdates(),
+          getBookmarks(),
+          getNotificationsUnreadCount(),
+        ]);
+
+        setRecentUpdates(updates || { questions: [], notes: [] });
+        setBookmarkCount(Array.isArray(bookmarks) ? bookmarks.length : 0);
+        setUnreadCount(unreadResponse?.unreadCount || 0);
       } catch (loadError) {
-        if (!(
-          recentUpdatesRef.current.questions.length > 0 ||
-          recentUpdatesRef.current.notes.length > 0
-        )) {
-          setError(
-            loadError.response?.data?.message || "Failed to load home dashboard."
-          );
-        }
+        setError(loadError.response?.data?.message || "Failed to load your dashboard.");
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [isAdmin]
+    [isAdmin, setUnreadCount]
   );
 
   useFocusEffect(
     useCallback(() => {
+      animateEntrance();
       loadDashboard();
-      return () => {};
-    }, [loadDashboard])
+    }, [animateEntrance, loadDashboard])
   );
+
+  useEffect(() => {
+    if (!toast.message) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      setToast({ message: "", type: "info" });
+    }, 2200);
+
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const userName = user?.name?.split(" ")?.[0] || "Student";
-  const userDisplayName = user?.name || userName;
-  const recentFeed = useMemo(() => buildRecentFeed(recentUpdates), [recentUpdates]);
-  const subtitle = useMemo(
-    () => buildMotivationSubtitle({ selectedBranch, selectedSemester, recentUpdates }),
-    [recentUpdates, selectedBranch, selectedSemester]
-  );
-  const smartTip = useMemo(
-    () => buildSmartTip({ recentUpdates, selectedBranch, selectedSemester }),
-    [recentUpdates, selectedBranch, selectedSemester]
-  );
-  const quickAccessItems = useMemo(
-    () => buildQuickAccessItems(recentUpdates),
-    [recentUpdates]
-  );
-  const premiumStatus = useMemo(
-    () => getPremiumStatus({ isPaid, accessExpiry }),
-    [accessExpiry, isPaid]
-  );
+  const greeting = getGreeting();
+  const initials = (user?.name || "S")
+    .split(" ")
+    .map((item) => item.charAt(0))
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
-  const continueData = useMemo(() => {
-    if (selectedBranch?.name && selectedSemester?.number) {
+  const recentItems = useMemo(() => buildRecentItems(recentUpdates), [recentUpdates]);
+  const insight = useMemo(() => buildInsight(recentUpdates), [recentUpdates]);
+
+  const continueCard = useMemo(() => {
+    if (lastActivity?.subjectName) {
       return {
-        primary: selectedBranch.name,
-        secondary: `Semester ${selectedSemester.number}`,
-        tertiary: "Continue Learning",
+        title: lastActivity.subjectName,
+        subtitle: lastActivity.moduleNumber
+          ? `Module ${lastActivity.moduleNumber}`
+          : selectedSemester?.number
+            ? `Semester ${selectedSemester.number}`
+            : "Resume studying",
+        hint: lastActivity.topicName || "Continue where you stopped last time.",
         ctaLabel: "Continue",
-        progressLabel: "Progress tracking unlocks as you keep studying.",
-        progressValue: null,
       };
     }
 
-    if (selectedBranch?.name) {
+    if (selectedBranch?.name && selectedSemester?.number) {
       return {
-        primary: selectedBranch.name,
-        secondary: "Selected Branch",
-        tertiary: "Continue Learning",
+        title: selectedBranch.name,
+        subtitle: `Semester ${selectedSemester.number}`,
+        hint: "Continue learning with your selected academic path.",
         ctaLabel: "Continue",
-        progressLabel: "Select a semester to personalize this path.",
-        progressValue: null,
       };
     }
 
     return {
-      primary: "Start Learning",
-      secondary: "Choose your branch and semester",
-      tertiary: "Build your study path",
+      title: "Start Learning",
+      subtitle: "Pick your branch to begin",
+      hint: "Browse branches, semesters, and subjects to unlock study material.",
       ctaLabel: "Start Learning",
-      progressLabel: "Start with a branch and semester.",
-      progressValue: null,
     };
-  }, [selectedBranch, selectedSemester]);
+  }, [lastActivity, selectedBranch, selectedSemester]);
 
-  if (loading && isAdmin) {
-    return <ErrorState title="Loading admin dashboard..." />;
-  }
+  const quickAccessCards = useMemo(() => {
+    const repeatedCount = recentUpdates.questions.filter((item) => Number(item.frequency) > 1).length;
 
-  if (isAdmin) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
-        <View
-          style={[
-            styles.adminContainer,
+    return QUICK_ACCESS.map((item) => {
+      if (item.key === "mostRepeated" && repeatedCount > 0) {
+        return { ...item, subtitle: `${repeatedCount} Questions` };
+      }
+
+      if (item.key === "notes" && recentUpdates.notes.length > 0) {
+        return { ...item, subtitle: `${recentUpdates.notes.length} Files` };
+      }
+
+      return { ...item, subtitle: "Tap to explore" };
+    });
+  }, [recentUpdates]);
+
+  const daysRemaining = useMemo(() => {
+    if (!accessExpiry) {
+      return 0;
+    }
+    const diff = new Date(accessExpiry).getTime() - Date.now();
+    return Math.max(0, Math.ceil(diff / (24 * 60 * 60 * 1000)));
+  }, [accessExpiry]);
+
+  const premiumTone = daysRemaining < 10 ? colors.danger : daysRemaining <= 30 ? colors.warning : colors.success;
+  const premiumSubtitle = isPaid && daysRemaining > 0 ? "Premium library unlocked" : "Renew to continue premium access";
+
+  const openRecentItem = async (item) => {
+    if (item.type === "question") {
+      navigation.navigate("QuestionDetail", { question: item.payload });
+      return;
+    }
+
+    if (item.type === "note") {
+      if (isPdfFile({ url: item.payload.fileUrl, fileName: item.payload.title })) {
+        try {
+          await openPdfExternally(item.payload.fileUrl);
+        } catch (error) {
+          setToast({ message: "Unable to open note.", type: "error" });
+        }
+        return;
+      }
+
+      navigation.navigate("WebViewer", {
+        title: item.payload.title,
+        url: item.payload.fileUrl,
+      });
+    }
+  };
+
+  const openQuickAccess = (item) => {
+    if (lastActivity?.module && item.key === "mostRepeated") {
+      navigation.navigate("MostRepeated", { module: lastActivity.module });
+      return;
+    }
+
+    if (lastActivity?.module && item.key === "concepts") {
+      navigation.navigate("ConceptList", { module: lastActivity.module });
+      return;
+    }
+
+    if (lastActivity?.module && item.key === "notes") {
+      navigation.navigate("Notes", { module: lastActivity.module });
+      return;
+    }
+
+    if (lastActivity?.module && item.key === "topRevision") {
+      navigation.navigate("TopRevision", { module: lastActivity.module });
+      return;
+    }
+
+    navigation.navigate("BrowseTab");
+  };
+
+  const openInsight = () => {
+    if (insight.hasAction && lastActivity?.module) {
+      navigation.navigate("MostRepeated", { module: lastActivity.module });
+      return;
+    }
+
+    navigation.navigate("BrowseTab");
+  };
+
+  const screenAnimatedStyle = {
+    opacity: entrance,
+    transform: [
+      {
+        translateY: entrance.interpolate({
+          inputRange: [0, 1],
+          outputRange: [20, 0],
+        }),
+      },
+    ],
+  };
+
+  const headerBleedStyle = {
+    marginHorizontal: -layout.horizontalPadding,
+    paddingHorizontal: layout.horizontalPadding,
+  };
+  const constrainedWidthStyle = {
+    width: "100%",
+    maxWidth: layout.contentMaxWidth,
+    alignSelf: "center",
+  };
+  const stackHero = layout.width < 390;
+  const heroCardResponsiveStyle = stackHero
+    ? {
+        flexDirection: "column",
+        alignItems: "flex-start",
+        padding: spacing.md,
+      }
+    : null;
+  const heroCopyResponsiveStyle = stackHero
+    ? {
+        paddingRight: 0,
+        marginBottom: spacing.md,
+      }
+    : null;
+  const heroArtworkResponsiveStyle = stackHero
+    ? {
+        alignSelf: "flex-end",
+      }
+    : null;
+  const heroArtworkCircleResponsiveStyle = stackHero
+    ? {
+        width: 78,
+        height: 78,
+      }
+    : {
+        width: layout.isTablet ? 110 : 96,
+        height: layout.isTablet ? 110 : 96,
+      };
+  const heroTitleResponsiveStyle = stackHero
+    ? {
+        fontSize: typography.xl,
+        lineHeight: 26,
+      }
+    : {
+        fontSize: layout.isTablet ? typography.xxxl : typography.xxl,
+      };
+  const heroSubtitleResponsiveStyle = stackHero
+    ? {
+        fontSize: typography.base,
+      }
+    : null;
+  const heroHintResponsiveStyle = stackHero
+    ? {
+        fontSize: typography.sm,
+        lineHeight: 18,
+      }
+    : null;
+  const quickAccessSingleColumn = layout.width < 350;
+  const stackAccessCard = layout.width < 390;
+  const quickCardWrapStyle = {
+    width: quickAccessSingleColumn ? "100%" : "48.5%",
+  };
+  const streakItems = [
+    {
+      icon: "flame-outline",
+      value: streakCount,
+      label: "Day Streak",
+      color: colors.accent,
+      bg: colors.accentLight,
+    },
+    {
+      icon: "bookmark-outline",
+      value: bookmarkCount,
+      label: "Bookmarks",
+      color: colors.primary,
+      bg: colors.primaryLight,
+    },
+    {
+      icon: "library-outline",
+      value: exploredSubjectsCount,
+      label: "Subjects",
+      color: colors.success,
+      bg: colors.successLight,
+    },
+  ];
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
+      <Animated.View style={[styles.flex, screenAnimatedStyle]}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => loadDashboard(true)}
+              tintColor={colors.primary}
+            />
+          }
+          contentContainerStyle={[
+            styles.scrollContent,
             {
               paddingHorizontal: layout.horizontalPadding,
-              paddingVertical: layout.isTablet ? 28 : 20,
-              maxWidth: layout.formMaxWidth,
+              paddingBottom: spacing.xxxl,
             },
           ]}
         >
-          <Text style={[styles.adminTitle, { color: colors.text }]}>ExamPulse Admin</Text>
-          <Text style={[styles.adminSubtitle, { color: colors.subtext }]}>
-            Welcome, {user?.name || "Admin"}
-          </Text>
-          <View
-            style={[
-              styles.adminBanner,
-              { backgroundColor: colors.warningBg, borderColor: colors.warningText },
-            ]}
+          <LinearGradient
+            colors={[colors.primary, colors.primaryDark]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.headerGradient, headerBleedStyle]}
           >
-            <Text style={[styles.adminBannerTitle, { color: colors.warningText }]}>
-              Admin access enabled
-            </Text>
-            <Text style={[styles.adminBannerText, { color: colors.warningText }]}>
-              Use the Admin tab to manage branches, semesters, subjects, modules,
-              topics, questions, notes, users, and reports.
-            </Text>
+            <View style={constrainedWidthStyle}>
+              <View style={styles.brandRow}>
+                <AppBrandHeader
+                  examTextColor="#D7E3FF"
+                  pulseTextColor="#FF9A3D"
+                  logoSize={64}
+                  textSize={typography.xxl}
+                  marginTop={spacing.sm}
+                  marginBottom={0}
+                />
+
+                <View style={styles.headerActions}>
+                  <Pressable
+                    onPress={() => navigation.navigate("Notifications")}
+                    style={styles.headerIconButton}
+                  >
+                    <Ionicons name="notifications-outline" size={22} color="#FFFFFF" />
+                    {unreadCount > 0 ? (
+                      <View style={styles.notificationBadge}>
+                        <Text style={styles.notificationBadgeText}>
+                          {unreadCount > 9 ? "9+" : unreadCount}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setProfileOpen((current) => !current)}
+                    style={styles.avatar}
+                  >
+                    <Text style={styles.avatarText}>{initials}</Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              <View style={styles.headerRow}>
+                <View style={styles.headerCopy}>
+                  <Text style={styles.headerKicker}>{greeting}</Text>
+                  <Text numberOfLines={1} style={styles.headerName}>
+                    {userName}
+                  </Text>
+                  <Text style={styles.headerSubtitle}>
+                    Silicon University exam prep made sharper and faster.
+                  </Text>
+                </View>
+              </View>
+
+              <View
+                style={[
+                  styles.heroCard,
+                  shadows.card,
+                  { backgroundColor: colors.surface },
+                  heroCardResponsiveStyle,
+                ]}
+              >
+                <View style={[styles.heroCopyWrap, heroCopyResponsiveStyle]}>
+                  <StatBadge
+                    label={lastActivity?.subjectName ? "Resume" : "Start Learning"}
+                    color="primary"
+                    style={{ marginBottom: spacing.sm }}
+                  />
+                  <Text style={[styles.heroTitle, heroTitleResponsiveStyle, { color: colors.text }]}>
+                    {continueCard.title}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.heroSubtitle,
+                      heroSubtitleResponsiveStyle,
+                      { color: colors.textSecondary },
+                    ]}
+                  >
+                    {continueCard.subtitle}
+                  </Text>
+                  <Text
+                    style={[styles.heroHint, heroHintResponsiveStyle, { color: colors.textSecondary }]}
+                  >
+                    {continueCard.hint}
+                  </Text>
+                  <Pressable
+                    onPress={() => navigation.navigate("BrowseTab")}
+                    style={({ pressed }) => [
+                      styles.heroButton,
+                      {
+                        backgroundColor: colors.primary,
+                        opacity: pressed ? 0.9 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.heroButtonText}>{continueCard.ctaLabel}</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+                  </Pressable>
+                </View>
+
+                <View style={[styles.heroArtworkWrap, heroArtworkResponsiveStyle]}>
+                  <View
+                    style={[
+                      styles.heroArtworkCircle,
+                      heroArtworkCircleResponsiveStyle,
+                      { backgroundColor: colors.primaryLight },
+                    ]}
+                  >
+                    <Ionicons
+                      name="school-outline"
+                      size={stackHero ? 36 : layout.isTablet ? 50 : 44}
+                      color={colors.primary}
+                    />
+                  </View>
+                  <View style={[styles.heroArtworkBadge, { backgroundColor: colors.accent }]}>
+                    <Ionicons name="book-outline" size={18} color="#FFFFFF" />
+                  </View>
+                </View>
+              </View>
+            </View>
+          </LinearGradient>
+
+          {profileOpen ? (
+            <Pressable style={styles.profileBackdrop} onPress={() => setProfileOpen(false)}>
+              <View
+                style={[
+                  styles.profileMenu,
+                  shadows.modal,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                  },
+                ]}
+              >
+                <Text style={[styles.profileName, { color: colors.text }]}>{user?.name || "Student"}</Text>
+                <Pressable
+                  onPress={() => {
+                    toggleTheme();
+                    setProfileOpen(false);
+                  }}
+                  style={styles.profileRow}
+                >
+                  <Ionicons
+                    name={isDark ? "sunny-outline" : "moon-outline"}
+                    size={18}
+                    color={colors.primary}
+                  />
+                  <Text style={[styles.profileRowText, { color: colors.text }]}>
+                    {isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={async () => {
+                    setProfileOpen(false);
+                    await logout();
+                    navigation.reset({
+                      index: 0,
+                      routes: [{ name: "Login" }],
+                    });
+                  }}
+                  style={styles.profileRow}
+                >
+                  <Ionicons name="log-out-outline" size={18} color={colors.danger} />
+                  <Text style={[styles.profileRowText, { color: colors.danger }]}>Logout</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          ) : null}
+
+          <View style={[styles.bodyContent, constrainedWidthStyle]}>
+            <View style={styles.streakRow}>
+              {streakItems.map((item) => (
+                <View
+                  key={item.label}
+                  style={[
+                    styles.streakCard,
+                    shadows.card,
+                    {
+                      backgroundColor: colors.surface,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <View style={[styles.streakIconWrap, { backgroundColor: item.bg }]}>
+                    <Ionicons name={item.icon} size={20} color={item.color} />
+                  </View>
+                  <Text style={[styles.streakValue, { color: colors.text }]}>{item.value}</Text>
+                  <Text style={[styles.streakLabel, { color: colors.textSecondary }]}>{item.label}</Text>
+                </View>
+              ))}
+            </View>
+
+            {loading ? <HomeLoading layout={layout} /> : null}
+
+            {!loading && error ? (
+              <ErrorState title="Unable to load dashboard" subtitle={error} onRetry={() => loadDashboard()} />
+            ) : null}
+
+            {!loading && !error ? (
+              <>
+                <SectionHeader title="Quick Access" />
+                <View style={styles.grid}>
+                  {quickAccessCards.map((item) => (
+                    <QuickAccessCard
+                      key={item.key}
+                      item={item}
+                      subtitle={item.subtitle}
+                      onPress={openQuickAccess}
+                      wrapStyle={quickCardWrapStyle}
+                    />
+                  ))}
+                </View>
+
+                <Pressable onPress={openInsight}>
+                  <View
+                    style={[
+                      styles.insightCard,
+                      shadows.card,
+                      {
+                        backgroundColor: colors.surface,
+                        borderColor: colors.border,
+                      },
+                    ]}
+                  >
+                    <View style={[styles.insightAccent, { backgroundColor: colors.accent }]} />
+                    <View style={styles.insightBody}>
+                      <View style={styles.insightHeader}>
+                        <Ionicons name="bulb-outline" size={20} color={colors.accent} />
+                        <Text style={[styles.insightTitle, { color: colors.text }]}>Exam Insight</Text>
+                      </View>
+                      <Text style={[styles.insightText, { color: colors.textSecondary }]}>
+                        {insight.message}
+                      </Text>
+                      {insight.hasAction ? (
+                        <Text style={[styles.insightAction, { color: colors.accent }]}>
+                          View Related Questions →
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                </Pressable>
+
+                <SectionHeader
+                  title="Recent Updates"
+                  actionLabel="View All"
+                  onAction={() => navigation.navigate("BrowseTab")}
+                />
+
+                {recentItems.length ? (
+                  <View
+                    style={[
+                      styles.recentCard,
+                      shadows.card,
+                      {
+                        backgroundColor: colors.surface,
+                        borderColor: colors.border,
+                      },
+                    ]}
+                  >
+                    {recentItems.map((item, index) => (
+                      <Pressable
+                        key={item.id}
+                        onPress={() => openRecentItem(item)}
+                        style={[
+                          styles.recentRow,
+                          index < recentItems.length - 1 && {
+                            borderBottomWidth: StyleSheet.hairlineWidth,
+                            borderBottomColor: colors.border,
+                          },
+                        ]}
+                      >
+                        <View style={[styles.recentIcon, { backgroundColor: item.bg }]}>
+                          <Ionicons name={item.icon} size={20} color={item.color} />
+                        </View>
+                        <View style={styles.recentBody}>
+                          <StatBadge
+                            label={item.badge}
+                            color={item.type === "question" ? "primary" : "success"}
+                            style={{ marginBottom: spacing.xs }}
+                          />
+                          <Text numberOfLines={1} style={[styles.recentTitle, { color: colors.text }]}>
+                            {item.title}
+                          </Text>
+                          <Text
+                            numberOfLines={1}
+                            style={[styles.recentSubtitle, { color: colors.textSecondary }]}
+                          >
+                            {item.subtitle}
+                          </Text>
+                        </View>
+                        <View style={styles.recentMeta}>
+                          <Text style={[styles.recentTime, { color: colors.textTertiary }]}>
+                            {formatRelativeDate(item.timestamp)}
+                          </Text>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={16}
+                            color={colors.textTertiary}
+                          />
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : (
+                  <EmptyState
+                    icon="sparkles-outline"
+                    title="No recent updates yet"
+                    subtitle="Fresh PYQs and notes uploaded by the admin will appear here."
+                  />
+                )}
+
+                <Pressable onPress={() => navigation.navigate("Paywall")}>
+                  <View
+                    style={[
+                      styles.accessCard,
+                      stackAccessCard && styles.accessCardStacked,
+                      shadows.card,
+                      {
+                        backgroundColor: colors.surface,
+                        borderColor: colors.border,
+                        borderLeftColor: premiumTone,
+                      },
+                    ]}
+                  >
+                    <View style={[styles.accessLeft, stackAccessCard && styles.accessLeftStacked]}>
+                      <View
+                        style={[
+                          styles.accessIconWrap,
+                          {
+                            backgroundColor:
+                              daysRemaining > 0 ? colors.successLight : colors.dangerLight,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={daysRemaining > 0 ? "checkmark-circle" : "alert-circle"}
+                          size={24}
+                          color={daysRemaining > 0 ? colors.success : colors.danger}
+                        />
+                      </View>
+                      <View style={styles.accessTextWrap}>
+                        <Text style={[styles.accessTitle, { color: premiumTone }]}>
+                          {daysRemaining > 0 ? "Access Active" : "Access Expired"}
+                        </Text>
+                        <Text style={[styles.accessSubtitle, { color: colors.textSecondary }]}>
+                          {premiumSubtitle}
+                        </Text>
+                        <Text style={[styles.accessDate, { color: colors.text }]}>
+                          Valid Till: {formatExpiryDate(accessExpiry)}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={stackAccessCard && styles.accessRingWrapStacked}>
+                      <CircularDaysRing daysRemaining={daysRemaining} color={premiumTone} />
+                    </View>
+                  </View>
+                </Pressable>
+              </>
+            ) : null}
           </View>
-          <Pressable
-            onPress={() => navigation.navigate("AdminTab")}
-            style={[styles.primaryAdminButton, { backgroundColor: colors.primary }]}
-          >
-            <Text style={styles.primaryAdminButtonText}>Open Admin Panel</Text>
-          </Pressable>
-          <Pressable
-            onPress={async () => {
-              await logout();
-              navigation.replace("Login");
-            }}
-            style={[
-              styles.secondaryAdminButton,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <Text style={[styles.secondaryAdminButtonText, { color: colors.text }]}>
-              Logout
-            </Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <StudentHomeView
-      colors={colors}
-      isDark={isDark}
-      layout={layout}
-      loading={loading}
-      error={error}
-      refreshing={refreshing}
-      userName={userName}
-      userDisplayName={userDisplayName}
-      greetingPrefix={getGreetingPrefix()}
-      subtitle={subtitle}
-      unreadCount={recentFeed.length}
-      continueData={continueData}
-      quickAccessItems={quickAccessItems}
-      recentFeed={recentFeed}
-      smartTip={smartTip}
-      premiumStatus={premiumStatus}
-      onRefresh={() => loadDashboard(true)}
-      onRetry={() => loadDashboard()}
-      onOpenBrowse={() => navigation.navigate("BrowseTab")}
-      onOpenNotifications={() => navigation.navigate("BookmarksTab")}
-      onToggleTheme={() => toggleTheme()}
-      onOpenSearch={() => navigation.navigate("SearchTab")}
-      onOpenSmartTip={() => {
-        if (smartTip.actionType === "note" && recentFeed.find((item) => item.type === "note")) {
-          const noteItem = recentFeed.find((item) => item.type === "note");
-          navigation.navigate("WebViewer", {
-            title: noteItem.payload.title,
-            url: noteItem.payload.fileUrl,
-          });
-          return;
-        }
-
-        navigation.navigate("SearchTab");
-      }}
-      onOpenContinue={() => navigation.navigate("BrowseTab")}
-      onOpenQuickAccess={() => navigation.navigate("BrowseTab")}
-      onOpenRecentUpdates={() => navigation.navigate("BrowseTab")}
-      onOpenRecentUpdate={(item) => {
-        if (item.type === "question") {
-          navigation.navigate("QuestionDetail", { question: item.payload });
-          return;
-        }
-
-        if (item.type === "note" && item.payload?.fileUrl) {
-          navigation.navigate("WebViewer", {
-            title: item.payload.title,
-            url: item.payload.fileUrl,
-          });
-          return;
-        }
-
-        navigation.navigate("BrowseTab");
-      }}
-      onOpenPremium={() => navigation.navigate("Paywall")}
-      onLogout={async () => {
-        await logout();
-        navigation.replace("Login");
-      }}
-    />
+        </ScrollView>
+        <Toast message={toast.message} type={toast.type} />
+      </Animated.View>
+    </SafeAreaView>
   );
 }
 
@@ -1559,622 +1062,401 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
-  scrollContent: {
-    alignItems: "center",
-  },
-  page: {
-    width: "100%",
-  },
-  dashboardSpacing: {
-    gap: 22,
-  },
-  cardSurface: {
-    borderWidth: 1,
-    borderRadius: 28,
-    shadowOpacity: 0.06,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 2,
-  },
-  adminContainer: {
-    alignSelf: "center",
-    width: "100%",
-    gap: 16,
-  },
-  adminTitle: {
-    fontSize: 30,
-    fontWeight: "800",
-  },
-  adminSubtitle: {
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  adminBanner: {
-    borderWidth: 1,
-    borderRadius: 18,
-    padding: 16,
-  },
-  adminBannerTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-    marginBottom: 4,
-  },
-  adminBannerText: {
-    lineHeight: 21,
-  },
-  primaryAdminButton: {
-    borderRadius: 16,
-    paddingVertical: 15,
-    alignItems: "center",
-  },
-  primaryAdminButtonText: {
-    color: "#ffffff",
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  secondaryAdminButton: {
-    borderRadius: 16,
-    borderWidth: 1,
-    paddingVertical: 15,
-    alignItems: "center",
-  },
-  secondaryAdminButtonText: {
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  profileMenuBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 1,
-  },
-  headerButton: {
-    width: 46,
-    height: 46,
-    borderWidth: 1,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 2,
-    position: "relative",
-  },
-  themeToggle: {
-    width: 58,
-    height: 34,
-    borderWidth: 1,
-    borderRadius: 999,
-    position: "relative",
-    justifyContent: "center",
-    paddingHorizontal: 2,
-  },
-  themeIconLeft: {
-    position: "absolute",
-    left: 10,
-    top: 9,
-  },
-  themeIconRight: {
-    position: "absolute",
-    right: 10,
-    top: 9,
-  },
-  themeKnob: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  notificationBadge: {
-    minWidth: 19,
-    height: 19,
-    borderRadius: 999,
-    paddingHorizontal: 5,
-    position: "absolute",
-    top: 6,
-    right: 4,
-    backgroundColor: "#ff6b2b",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  notificationBadgeText: {
-    color: "#ffffff",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  headerBrand: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-start",
+  flex: {
     flex: 1,
-    minWidth: 0,
-    paddingRight: 10,
   },
-  headerLogoCrop: {
+  scrollContent: {
+    paddingTop: 0,
+  },
+  headerGradient: {
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
+    padding: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.giant + spacing.lg,
     overflow: "hidden",
-    borderRadius: 16,
+  },
+  brandRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-    backgroundColor: "transparent",
+    marginBottom: spacing.lg,
   },
-  headerLogoImage: {
-    alignSelf: "center",
-    transform: [{ translateY: -2 }],
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
   },
-  headerBrandText: {
-    fontWeight: "900",
-    letterSpacing: -0.8,
+  headerCopy: {
+    flex: 1,
+    paddingRight: spacing.md,
+  },
+  headerKicker: {
+    fontSize: typography.sm,
+    color: "rgba(255,255,255,0.82)",
+    fontWeight: fontWeights.medium,
+    marginBottom: spacing.xs,
+  },
+  headerName: {
+    fontSize: typography.xxxl,
+    lineHeight: 34,
+    color: "#FFFFFF",
+    fontWeight: fontWeights.extrabold,
+    marginBottom: spacing.xs,
+  },
+  headerSubtitle: {
+    fontSize: typography.md,
+    color: "rgba(255,255,255,0.82)",
+    lineHeight: 20,
   },
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    zIndex: 2,
+    gap: spacing.sm,
   },
-  profileMenuAnchor: {
-    position: "relative",
-  },
-  profileButton: {
-    width: 46,
-    height: 46,
-    borderWidth: 1,
-    borderRadius: 16,
+  headerIconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.full,
     alignItems: "center",
     justifyContent: "center",
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 2,
-  },
-  profileInitial: {
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  profileMenu: {
-    position: "absolute",
-    top: 54,
-    right: 0,
-    width: 176,
-    borderWidth: 1,
-    borderRadius: 18,
-    padding: 12,
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 8,
-  },
-  profileMenuName: {
-    fontSize: 15,
-    fontWeight: "700",
-    marginBottom: 10,
-  },
-  profileMenuLogout: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: "center",
-  },
-  profileMenuLogoutText: {
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  pressedButton: {
-    opacity: 0.92,
-    transform: [{ scale: 0.97 }],
-  },
-  pressedCard: {
-    transform: [{ scale: 0.985 }],
-  },
-  pressedRow: {
-    opacity: 0.86,
-  },
-  greetingSection: {
-    marginBottom: 6,
-  },
-  greetingKicker: {
-    fontSize: 15,
-    fontWeight: "700",
-    marginBottom: 5,
-  },
-  greetingTitle: {
-    fontWeight: "800",
-    marginBottom: 6,
-    letterSpacing: -0.6,
-  },
-  greetingSubtitle: {
-    fontSize: 15,
-    lineHeight: 23,
-  },
-  heroCard: {
-    overflow: "hidden",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    minHeight: 150,
+    backgroundColor: "rgba(255,255,255,0.14)",
     position: "relative",
   },
-  heroGlow: {
+  notificationBadge: {
     position: "absolute",
-    borderRadius: 999,
-    opacity: 0.32,
+    top: 4,
+    right: 4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: radius.full,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#EF4444",
   },
-  heroGlowTop: {
-    width: 220,
-    height: 220,
-    backgroundColor: "#1d4ed8",
-    top: -82,
-    left: -68,
+  notificationBadgeText: {
+    color: "#FFFFFF",
+    fontSize: typography.xs,
+    fontWeight: fontWeights.bold,
   },
-  heroGlowBottom: {
-    width: 260,
-    height: 260,
-    backgroundColor: "#08162f",
-    right: -88,
-    bottom: -120,
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.full,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  heroCardContent: {
+  avatarText: {
+    color: "#FFFFFF",
+    fontWeight: fontWeights.bold,
+    fontSize: typography.md,
+  },
+  heroCard: {
+    marginTop: spacing.xl,
+    marginBottom: -spacing.xxxl,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
   },
-  heroCardContentCompact: {
-    flexDirection: "column",
-    alignItems: "flex-start",
-  },
-  heroCopy: {
+  heroCopyWrap: {
     flex: 1,
-    minWidth: 0,
-    paddingRight: 8,
+    paddingRight: spacing.md,
   },
-  heroEyebrow: {
-    color: "#ff9d2d",
-    fontSize: 13,
-    fontWeight: "800",
-    marginBottom: 8,
+  heroTitle: {
+    fontSize: typography.xxl,
+    fontWeight: fontWeights.extrabold,
+    marginBottom: spacing.xs,
   },
-  heroHeadline: {
-    color: "#ffffff",
-    fontSize: 28,
-    fontWeight: "800",
-    lineHeight: 31,
-    letterSpacing: -0.8,
-    marginBottom: 2,
+  heroSubtitle: {
+    fontSize: typography.lg,
+    fontWeight: fontWeights.semibold,
+    marginBottom: spacing.xs,
   },
-  heroMeta: {
-    color: "rgba(255,255,255,0.84)",
-    fontSize: 13,
-    fontWeight: "600",
-    marginBottom: 2,
-  },
-  heroTopic: {
-    color: "#ffffff",
-    fontSize: 13,
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  progressTrack: {
-    width: "78%",
-    height: 4,
-    borderRadius: 999,
-    overflow: "hidden",
-    marginBottom: 7,
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "#ffffff",
-    borderRadius: 999,
-  },
-  progressCaption: {
-    color: "rgba(255,255,255,0.78)",
-    fontSize: 11,
-    lineHeight: 15,
-    marginBottom: 8,
-    maxWidth: 170,
+  heroHint: {
+    fontSize: typography.md,
+    lineHeight: 20,
+    marginBottom: spacing.md,
   },
   heroButton: {
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    backgroundColor: "#ffffff",
-    borderRadius: 16,
-    minWidth: 112,
-    justifyContent: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.full,
   },
   heroButtonText: {
-    color: "#0d2d72",
-    fontSize: 13,
-    fontWeight: "800",
+    color: "#FFFFFF",
+    fontSize: typography.md,
+    fontWeight: fontWeights.semibold,
   },
-  heroIllustrationWrap: {
+  heroArtworkWrap: {
     alignItems: "center",
     justifyContent: "center",
-    alignSelf: "center",
     position: "relative",
   },
-  heroIllustrationHalo: {
-    position: "absolute",
-    width: "100%",
-    height: "100%",
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  heroOrb: {
-    position: "absolute",
-    borderRadius: 999,
-  },
-  heroOrbLarge: {
-    width: "68%",
-    height: "68%",
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  heroOrbSmall: {
-    width: "42%",
-    height: "42%",
-    right: "10%",
-    bottom: "6%",
-    backgroundColor: "rgba(255,122,27,0.18)",
-  },
-  heroBadgeTop: {
-    width: "48%",
-    height: "48%",
-    borderRadius: 999,
-    backgroundColor: "#173b79",
+  heroArtworkCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: radius.full,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.08)",
   },
-  heroBadgeBottom: {
+  heroArtworkBadge: {
     position: "absolute",
-    right: "10%",
-    bottom: "10%",
-    width: "32%",
-    height: "32%",
-    borderRadius: 20,
-    backgroundColor: "#ffffff",
+    bottom: -6,
+    right: -6,
+    width: 34,
+    height: 34,
+    borderRadius: radius.full,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "rgba(16,45,100,0.08)",
   },
-  heroSpark: {
+  profileBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+  },
+  profileMenu: {
     position: "absolute",
-    left: "12%",
-    top: "16%",
+    top: spacing.xl,
+    right: spacing.md,
+    width: 220,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    padding: spacing.md,
   },
-  sectionHeader: {
+  profileName: {
+    fontSize: typography.lg,
+    fontWeight: fontWeights.bold,
+    marginBottom: spacing.md,
+  },
+  profileRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  profileRowText: {
+    fontSize: typography.md,
+    fontWeight: fontWeights.medium,
+  },
+  bodyContent: {
+    paddingTop: spacing.giant,
+  },
+  streakRow: {
+    flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: -6,
+    gap: spacing.sm,
+    marginBottom: spacing.xl,
   },
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: "800",
+  streakCard: {
+    flex: 1,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    backgroundColor: "#FFFFFF",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    alignItems: "center",
+    minHeight: 84,
   },
-  sectionAction: {
-    fontSize: 16,
-    fontWeight: "700",
+  streakIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.xxs,
   },
-  quickGrid: {
+  streakValue: {
+    fontSize: typography.xl,
+    fontWeight: fontWeights.extrabold,
+  },
+  streakLabel: {
+    marginTop: spacing.xxs,
+    fontSize: typography.sm,
+    fontWeight: fontWeights.medium,
+  },
+  grid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
-    rowGap: 14,
+    marginBottom: spacing.xl,
+  },
+  quickCardWrap: {
+    width: "48%",
+    marginBottom: spacing.md,
   },
   quickCard: {
-    minHeight: 158,
-    paddingHorizontal: 18,
-    paddingVertical: 20,
-    alignItems: "center",
-    justifyContent: "space-between",
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    padding: spacing.md,
+    minHeight: 120,
   },
   quickIconWrap: {
-    width: 66,
-    height: 66,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 16,
+    marginBottom: spacing.sm,
   },
   quickTitle: {
-    textAlign: "center",
-    fontSize: 16,
-    fontWeight: "700",
-    lineHeight: 22,
-    minHeight: 44,
+    fontSize: typography.lg,
+    fontWeight: fontWeights.bold,
+    marginBottom: spacing.xxs,
   },
-  quickMeta: {
-    marginTop: 10,
-    textAlign: "center",
-    fontSize: 13,
+  quickSubtitle: {
+    fontSize: typography.sm,
     lineHeight: 18,
   },
-  updatesCard: {
+  insightCard: {
+    flexDirection: "row",
+    overflow: "hidden",
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    marginBottom: spacing.xl,
+  },
+  insightAccent: {
+    width: 4,
+  },
+  insightBody: {
+    flex: 1,
+    padding: spacing.md,
+  },
+  insightHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  insightTitle: {
+    fontSize: typography.lg,
+    fontWeight: fontWeights.bold,
+  },
+  insightText: {
+    fontSize: typography.md,
+    lineHeight: 22,
+  },
+  insightAction: {
+    marginTop: spacing.sm,
+    fontSize: typography.md,
+    fontWeight: fontWeights.semibold,
+  },
+  recentCard: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    marginBottom: spacing.xl,
     overflow: "hidden",
   },
-  updateRow: {
+  recentRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    alignItems: "center",
+    padding: spacing.md,
   },
-  updateIconWrap: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
+  recentIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 14,
+    marginRight: spacing.sm,
   },
-  updateBody: {
+  recentBody: {
     flex: 1,
     minWidth: 0,
-    paddingRight: 10,
+    paddingRight: spacing.sm,
   },
-  updateBadge: {
-    alignSelf: "flex-start",
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    marginBottom: 8,
+  recentTitle: {
+    fontSize: typography.base,
+    fontWeight: fontWeights.bold,
+    marginBottom: spacing.xxs,
   },
-  updateBadgeText: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.4,
+  recentSubtitle: {
+    fontSize: typography.md,
   },
-  updateTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 4,
-  },
-  updateSubtitle: {
-    fontSize: 15,
-    lineHeight: 21,
-  },
-  updateMeta: {
+  recentMeta: {
     alignItems: "flex-end",
     justifyContent: "space-between",
-    minHeight: 54,
-    paddingTop: 2,
-    gap: 6,
+    marginLeft: spacing.sm,
+    minHeight: 44,
   },
-  updateTime: {
-    fontSize: 14,
-    fontWeight: "500",
+  recentTime: {
+    fontSize: typography.sm,
   },
-  tipCard: {
+  accessCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderLeftWidth: 4,
+    padding: spacing.md,
     flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  accessCardStacked: {
+    flexDirection: "column",
     alignItems: "flex-start",
-    paddingHorizontal: 18,
-    paddingVertical: 18,
   },
-  tipCardStacked: {
-    gap: 12,
+  accessLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    paddingRight: spacing.md,
   },
-  tipIconWrap: {
-    width: 58,
-    height: 58,
-    borderRadius: 20,
+  accessLeftStacked: {
+    width: "100%",
+    paddingRight: 0,
+  },
+  accessIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 14,
+    marginRight: spacing.sm,
   },
-  tipBody: {
+  accessTextWrap: {
     flex: 1,
-    minWidth: 0,
   },
-  tipTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    marginBottom: 6,
+  accessTitle: {
+    fontSize: typography.lg,
+    fontWeight: fontWeights.bold,
+    marginBottom: spacing.xxs,
   },
-  tipText: {
-    fontSize: 16,
-    lineHeight: 24,
+  accessSubtitle: {
+    fontSize: typography.md,
+    marginBottom: spacing.xxs,
   },
-  tipLink: {
-    marginTop: 10,
-    fontSize: 15,
-    fontWeight: "700",
+  accessDate: {
+    fontSize: typography.sm,
+    fontWeight: fontWeights.medium,
   },
-  premiumCard: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-  },
-  premiumIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
+  ringWrap: {
+    width: 70,
+    height: 70,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
   },
-  premiumBody: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: 10,
+  accessRingWrapStacked: {
+    alignSelf: "flex-end",
+    marginTop: spacing.md,
   },
-  premiumTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    marginBottom: 2,
-  },
-  premiumSubtitle: {
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  premiumMeta: {
-    alignItems: "flex-end",
-    minWidth: 70,
-  },
-  premiumMetaLabel: {
-    fontSize: 12,
-    marginBottom: 3,
-  },
-  premiumMetaDate: {
-    fontSize: 13,
-    fontWeight: "800",
-    textAlign: "right",
-  },
-  premiumDaysText: {
-    marginTop: 2,
-    fontSize: 10,
-    fontWeight: "700",
-  },
-  errorCard: {
-    paddingHorizontal: 20,
-    paddingVertical: 22,
-  },
-  errorTitle: {
-    fontSize: 21,
-    fontWeight: "800",
-    marginBottom: 8,
-  },
-  errorSubtitle: {
-    fontSize: 15,
-    lineHeight: 22,
-    marginBottom: 16,
-  },
-  errorButton: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    borderRadius: 999,
-  },
-  errorButtonText: {
-    color: "#ffffff",
-    fontWeight: "800",
-    fontSize: 15,
-  },
-  emptyPanel: {
-    paddingHorizontal: 20,
-    paddingVertical: 26,
+  ringContent: {
+    position: "absolute",
     alignItems: "center",
+    justifyContent: "center",
   },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    marginBottom: 8,
-    textAlign: "center",
+  ringValue: {
+    fontSize: typography.lg,
+    fontWeight: fontWeights.extrabold,
   },
-  emptySubtitle: {
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: "center",
+  ringLabel: {
+    fontSize: typography.xs,
+    color: "#6B7280",
+    fontWeight: fontWeights.medium,
   },
 });

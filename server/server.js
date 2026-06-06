@@ -35,6 +35,8 @@ require("./models/Bookmark");
 require("./models/Report");
 require("./models/PushToken");
 require("./models/PaymentOrder");
+require("./models/Notification");
+require("./models/UserNotification");
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;

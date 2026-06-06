@@ -47,9 +47,18 @@ router.delete("/remove", protect, accessCheck, async (req, res) => {
 
 router.get("/", protect, accessCheck, async (req, res) => {
   try {
-    const bookmarks = await Bookmark.find({ userId: req.user._id }).populate(
-      "questionId"
-    );
+    const bookmarks = await Bookmark.find({ userId: req.user._id }).populate({
+      path: "questionId",
+      populate: {
+        path: "topicId",
+        populate: {
+          path: "moduleId",
+          populate: {
+            path: "subjectId",
+          },
+        },
+      },
+    });
     return res.json(bookmarks);
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch bookmarks" });

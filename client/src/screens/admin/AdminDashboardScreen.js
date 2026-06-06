@@ -12,6 +12,7 @@ const actions = [
   { key: "question", title: "Manage Questions", route: "AdminQuestions" },
   { key: "concept", title: "Manage Concepts", route: "AdminEntityManager", params: { resource: "concept" } },
   { key: "note", title: "Manage Notes", route: "AdminNotes" },
+  { key: "notifications", title: "Send Notifications", route: "AdminNotifications" },
   { key: "users", title: "View Users", route: "AdminUsers" },
   { key: "reports", title: "View Reports", route: "AdminReports" },
 ];

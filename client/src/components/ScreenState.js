@@ -1,93 +1,125 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
-import { useResponsiveLayout } from "../utils/layout";
-import { useAppTheme } from "../utils/theme";
+import { radius, spacing, typography, useAppTheme } from "../utils/theme";
+import EmptyState from "./EmptyState";
+import SkeletonLoader from "./SkeletonLoader";
 
-export function LoadingState({ label = "Loading..." }) {
+export { default as EmptyState } from "./EmptyState";
+
+export function LoadingState({
+  label = "Loading...",
+  rows = 3,
+  itemHeight = 80,
+  withHero = false,
+}) {
   const { colors } = useAppTheme();
-  const layout = useResponsiveLayout();
 
   return (
-    <View style={[styles.center, { backgroundColor: colors.background }]}>
-      <ActivityIndicator size="large" color={colors.primary} />
-      <Text
-        style={[
-          styles.caption,
-          { color: colors.subtext, maxWidth: layout.formMaxWidth },
-        ]}
-      >
-        {label}
-      </Text>
-    </View>
-  );
-}
-
-export function EmptyState({ title, subtitle }) {
-  const { colors } = useAppTheme();
-  const layout = useResponsiveLayout();
-
-  return (
-    <View style={[styles.center, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text, maxWidth: layout.formMaxWidth }]}>{title}</Text>
-      {subtitle ? (
-        <Text style={[styles.caption, { color: colors.subtext, maxWidth: layout.formMaxWidth }]}>
-          {subtitle}
-        </Text>
-      ) : null}
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={styles.loadingWrap}>
+        {withHero ? (
+          <SkeletonLoader
+            height={140}
+            borderRadius={20}
+            style={{ marginBottom: spacing.lg }}
+          />
+        ) : null}
+        {Array.from({ length: rows }).map((_, index) => (
+          <SkeletonLoader
+            key={`${label}-${index}`}
+            height={itemHeight}
+            borderRadius={16}
+            style={{ marginBottom: index === rows - 1 ? 0 : spacing.md }}
+          />
+        ))}
+        <Text style={[styles.loadingLabel, { color: colors.textSecondary }]}>{label}</Text>
+      </View>
     </View>
   );
 }
 
 export function ErrorState({ title = "Something went wrong", subtitle, onRetry }) {
   const { colors } = useAppTheme();
-  const layout = useResponsiveLayout();
 
   return (
-    <View style={[styles.center, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text, maxWidth: layout.formMaxWidth }]}>{title}</Text>
-      {subtitle ? (
-        <Text style={[styles.caption, { color: colors.subtext, maxWidth: layout.formMaxWidth }]}>
-          {subtitle}
-        </Text>
-      ) : null}
-      {onRetry ? (
-        <Pressable
-          onPress={onRetry}
-          style={[styles.button, { backgroundColor: colors.primary }]}
-        >
-          <Text style={[styles.buttonText, { color: colors.primaryText }]}>Retry</Text>
-        </Pressable>
-      ) : null}
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={styles.errorWrap}>
+        <View style={[styles.errorIconWrap, { backgroundColor: colors.dangerLight }]}>
+          <Ionicons name="alert-circle-outline" size={32} color={colors.danger} />
+        </View>
+        <Text style={[styles.errorTitle, { color: colors.text }]}>{title}</Text>
+        {subtitle ? (
+          <Text style={[styles.errorSubtitle, { color: colors.textSecondary }]}>
+            {subtitle}
+          </Text>
+        ) : null}
+        {onRetry ? (
+          <Pressable
+            onPress={onRetry}
+            style={({ pressed }) => [
+              styles.retryButton,
+              { backgroundColor: colors.primary, opacity: pressed ? 0.9 : 1 },
+            ]}
+          >
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  center: {
+  container: {
     flex: 1,
+    paddingHorizontal: spacing.md,
+    justifyContent: "center",
+  },
+  loadingWrap: {
+    width: "100%",
+    maxWidth: 680,
+    alignSelf: "center",
+  },
+  loadingLabel: {
+    marginTop: spacing.lg,
+    textAlign: "center",
+    fontSize: typography.md,
+  },
+  errorWrap: {
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: spacing.xl,
   },
-  title: {
-    fontSize: 18,
+  errorIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.lg,
+  },
+  errorTitle: {
+    fontSize: typography.xxl,
     fontWeight: "700",
-    color: "#18304b",
     textAlign: "center",
+    marginBottom: spacing.xs,
   },
-  caption: {
-    marginTop: 10,
-    fontSize: 14,
+  errorSubtitle: {
+    fontSize: typography.base,
+    lineHeight: 24,
     textAlign: "center",
-    lineHeight: 20,
+    maxWidth: 320,
   },
-  button: {
-    marginTop: 18,
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+  retryButton: {
+    marginTop: spacing.lg,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
   },
-  buttonText: {
-    fontWeight: "700",
+  retryText: {
+    color: "#FFFFFF",
+    fontSize: typography.base,
+    fontWeight: "600",
   },
 });

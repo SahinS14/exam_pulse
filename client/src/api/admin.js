@@ -210,3 +210,12 @@ export const resolveAdminReport = async (id) => {
   return response.data;
 };
 
+export const getAdminNotifications = async () => {
+  const response = await apiClient.get("/admin/notifications");
+  return response.data;
+};
+
+export const sendAdminNotification = async (payload) => {
+  const response = await apiClient.post("/admin/notifications", payload);
+  return response.data;
+};

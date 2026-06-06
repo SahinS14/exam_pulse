@@ -14,6 +14,7 @@ const REPORT_REASONS = [
   "Incorrect Answer",
   "Broken PDF",
 ];
+const NOTIFICATION_TYPES = ["admin", "promotion", "content", "system"];
 const ALLOWED_UPLOAD_RESOURCE_TYPES = ["image", "raw", "video", "auto"];
 
 const fieldError = (field, message, code = "invalid") => ({
@@ -459,10 +460,19 @@ const validateReportBody = validate((req) => {
   return errors;
 });
 
+const validateAdminNotificationBody = validate((req) => {
+  const errors = [];
+  pushRequiredString(errors, "title", req.body.title, 120);
+  pushRequiredString(errors, "body", req.body.body, 300);
+  pushStringEnum(errors, "type", req.body.type, NOTIFICATION_TYPES);
+  return errors;
+});
+
 module.exports = {
   NOTE_TYPES,
   MARK_CATEGORIES,
   REPORT_REASONS,
+  NOTIFICATION_TYPES,
   fieldError,
   sendValidationError,
   validate,
@@ -479,4 +489,5 @@ module.exports = {
   validateConceptBody,
   validateNoteBody,
   validateReportBody,
+  validateAdminNotificationBody,
 };

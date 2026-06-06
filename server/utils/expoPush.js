@@ -14,29 +14,38 @@ const chunk = (items, size) => {
   return chunks;
 };
 
-async function getActiveStudentPushTokens() {
-  const activeStudents = await User.find({
-    role: "student",
-    isPaid: true,
-    accessExpiry: { $gt: new Date() },
-  }).select("_id");
+async function getStudentPushTokens({ userIds, premiumOnly = true } = {}) {
+  let targetUserIds = userIds;
 
-  const activeUserIds = activeStudents.map((item) => item._id);
+  if (!targetUserIds) {
+    const filter = premiumOnly
+      ? {
+          role: "student",
+          isPaid: true,
+          accessExpiry: { $gt: new Date() },
+        }
+      : {
+          role: "student",
+        };
 
-  if (!activeUserIds.length) {
+    const students = await User.find(filter).select("_id");
+    targetUserIds = students.map((item) => item._id);
+  }
+
+  if (!targetUserIds.length) {
     return [];
   }
 
   const tokens = await PushToken.find({
-    userId: { $in: activeUserIds },
+    userId: { $in: targetUserIds },
     token: /^ExponentPushToken/,
   }).select("token");
 
   return tokens.map((item) => item.token);
 }
 
-async function sendExpoPushNotifications({ title, body, data }) {
-  const tokens = await getActiveStudentPushTokens();
+async function sendExpoPushNotifications({ title, body, data, userIds, premiumOnly = true }) {
+  const tokens = await getStudentPushTokens({ userIds, premiumOnly });
 
   if (!tokens.length) {
     return { sent: 0 };
@@ -73,5 +82,5 @@ async function sendExpoPushNotifications({ title, body, data }) {
 
 module.exports = {
   sendExpoPushNotifications,
+  getStudentPushTokens,
 };
-
