@@ -11,4 +11,4 @@ const derivedBaseUrl = hostUri
   : null;
 
 export const API_BASE_URL =
-  configuredBaseUrl || derivedBaseUrl || "http://10.191.133.141:5001/api";
+  configuredBaseUrl || derivedBaseUrl || "https://exampulse-api.onrender.com/api";

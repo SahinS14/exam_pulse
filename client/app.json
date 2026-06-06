@@ -51,7 +51,7 @@
       "expo-web-browser"
     ],
     "extra": {
-      "apiBaseUrl": "http://10.191.133.141:5001/api",
+      "apiBaseUrl": "https://exampulse-api.onrender.com/api",
       "whatsappNumber": "916376122867",
       "eas": {
         "projectId": "207eb0d1-ff59-4737-9d88-5fe6fa6dbd28"
