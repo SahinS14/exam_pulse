@@ -34,16 +34,6 @@ const createRateLimiter = ({
         Math.ceil((windowMs - (now - bucket.timestamps[0])) / 1000)
       );
 
-      console.log("[RateLimit] blocked", {
-        keyPrefix,
-        identity,
-        method: req.method,
-        url: req.originalUrl,
-        retryAfterSeconds,
-        currentRequests: bucket.timestamps.length,
-        maxRequests,
-      });
-
       res.set("Retry-After", String(retryAfterSeconds));
       return sendValidationError(
         res,

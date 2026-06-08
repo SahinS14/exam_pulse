@@ -54,7 +54,7 @@ async function createStudentNotification({
         data: {
           ...data,
           notificationId: String(notification._id),
-          type,
+          notificationType: type,
         },
         userIds: targetUserIds,
         premiumOnly,

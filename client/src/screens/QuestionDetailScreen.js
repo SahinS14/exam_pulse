@@ -93,7 +93,19 @@ export default function QuestionDetailScreen({ route }) {
       setReportVisible(false);
       setToast({ message: "Report submitted", type: "success" });
     } catch (error) {
-      Alert.alert("Report failed", "Please try again.");
+      if (error.response?.status === 409) {
+        setReportVisible(false);
+        setToast({
+          message: error.response?.data?.message || "You already reported this question.",
+          type: "info",
+        });
+        return;
+      }
+
+      Alert.alert(
+        "Report failed",
+        error.response?.data?.message || "Please try again."
+      );
     }
   };
 

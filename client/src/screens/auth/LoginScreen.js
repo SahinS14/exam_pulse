@@ -71,21 +71,10 @@ export default function LoginScreen({ navigation }) {
 
     try {
       setLoading(true);
-      console.log("LOGIN REQUEST", { email });
-      console.log("LOGIN REQUEST START");
       const data = await loginUser({ email, password });
-      console.log("LOGIN RESPONSE", {
-        status: 200,
-        data,
-      });
       await saveLogin(data);
       navigation.replace(hasActiveAccess(data.user) ? "MainTabs" : "Paywall");
     } catch (error) {
-      console.log("LOGIN ERROR", {
-        status: error.response?.status,
-        data: error.response?.data,
-        message: error.message,
-      });
       const alertConfig = getLoginErrorAlert(error);
       Alert.alert(alertConfig.title, alertConfig.message);
     } finally {

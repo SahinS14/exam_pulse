@@ -13,13 +13,15 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getBranches, getSemesters } from "../api/content";
+import { getBranches } from "../api/content";
 import AppBrandHeader from "../components/AppBrandHeader";
 import EmptyState from "../components/EmptyState";
 import PageSkeleton from "../components/PageSkeleton";
 import SectionHeader from "../components/SectionHeader";
 import { ErrorState } from "../components/ScreenState";
 import { useAppStore } from "../store/appStore";
+import { useAuthStore } from "../store/authStore";
+import { recordStudyActivity } from "../utils/studyActivity";
 import { useResponsiveLayout } from "../utils/layout";
 import {
   fontWeights,
@@ -183,6 +185,7 @@ function BranchRow({ item, semesterLabel, hasSemesters, onPress, index, compactL
 export default function BranchScreen({ navigation }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
+  const userId = useAuthStore((state) => state.user?._id);
   const setSelectedBranch = useAppStore((state) => state.setSelectedBranch);
   const compactLayout = layout.width < 390;
   const listColumns = layout.width >= 720 ? 3 : layout.width >= 360 ? 2 : 1;
@@ -196,7 +199,6 @@ export default function BranchScreen({ navigation }) {
         );
 
   const [branches, setBranches] = useState([]);
-  const [semesterCountMap, setSemesterCountMap] = useState({});
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -213,19 +215,6 @@ export default function BranchScreen({ navigation }) {
 
       const branchData = await getBranches();
       setBranches(branchData);
-
-      const countEntries = await Promise.all(
-        branchData.map(async (branch) => {
-          try {
-            const semesters = await getSemesters(branch._id);
-            return [branch._id, semesters.length];
-          } catch (semesterError) {
-            return [branch._id, 0];
-          }
-        })
-      );
-
-      setSemesterCountMap(Object.fromEntries(countEntries));
     } catch (loadError) {
       setError(loadError.response?.data?.message || "Failed to load branches.");
     } finally {
@@ -335,7 +324,7 @@ export default function BranchScreen({ navigation }) {
           />
         }
         renderItem={({ item, index }) => {
-          const count = semesterCountMap[item._id] || 0;
+          const count = Number(item.semesterCount) || 0;
           const hasSemesters = count > 0;
           const semesterLabel = `${count} Semester${count > 1 ? "s" : ""}`;
 
@@ -355,8 +344,22 @@ export default function BranchScreen({ navigation }) {
                 hasSemesters={hasSemesters}
                 index={index}
                 compactLayout={compactLayout}
-                onPress={(branch) => {
-                  setSelectedBranch(branch);
+                onPress={async (branch) => {
+                  await recordStudyActivity(userId, {
+                    branchId: branch._id,
+                    branchName: branch.name,
+                    semesterId: null,
+                    semesterNumber: null,
+                    subjectId: null,
+                    subjectName: null,
+                    moduleId: null,
+                    moduleNumber: null,
+                    moduleTitle: null,
+                    module: null,
+                    topicId: null,
+                    topicName: null,
+                  });
+                  await setSelectedBranch(branch);
                   navigation.navigate("Semester", { branch });
                 }}
               />

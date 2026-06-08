@@ -1,6 +1,9 @@
 import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
 
+import { useAppStore } from "./appStore";
+import { clearUserScopedClientState } from "../utils/userScopedState";
+
 const AUTH_TOKEN_KEY = "authToken";
 const AUTH_SESSION_KEY = "authSession";
 
@@ -75,6 +78,9 @@ export const useAuthStore = create((set) => ({
     set(nextState);
   },
   logout: async () => {
+    const userId = useAuthStore.getState().user?._id || null;
+    await clearUserScopedClientState(userId);
+    await useAppStore.getState().clearContext();
     await clearSession();
     set({
       user: null,
@@ -96,6 +102,24 @@ export const useAuthStore = create((set) => ({
       return {
         isPaid,
         accessExpiry,
+      };
+    });
+
+    await saveSession(snapshot);
+  },
+  handleAccessExpired: async () => {
+    let snapshot;
+
+    set((state) => {
+      snapshot = {
+        ...state,
+        isPaid: false,
+        accessExpiry: null,
+      };
+
+      return {
+        isPaid: false,
+        accessExpiry: null,
       };
     });
 

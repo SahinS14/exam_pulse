@@ -9,7 +9,6 @@ import {
   Text,
   View,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
@@ -35,11 +34,13 @@ import {
   typography,
   useAppTheme,
 } from "../utils/theme";
-import { isPdfFile, openPdfExternally } from "../utils/fileResources";
-
-const STREAK_KEY = "homeStudyStreak";
-const LAST_ACTIVITY_KEY = "lastStudyActivity";
-const EXPLORED_SUBJECTS_KEY = "exploredSubjectIds";
+import { openStudyResource } from "../utils/fileResources";
+import { getLastStudyActivity } from "../utils/studyActivity";
+import {
+  USER_SCOPED_KEYS,
+  getScopedAsyncItem,
+  setScopedAsyncItem,
+} from "../utils/userScopedState";
 
 const QUICK_ACCESS = [
   {
@@ -130,13 +131,17 @@ function formatExpiryDate(value) {
   });
 }
 
-async function updateStreak() {
+async function updateStreak(userId) {
   const today = new Date().toISOString().slice(0, 10);
-  const stored = await AsyncStorage.getItem(STREAK_KEY);
+  const stored = await getScopedAsyncItem(USER_SCOPED_KEYS.studyStreak, userId);
 
   if (!stored) {
     const next = { count: 1, lastDate: today };
-    await AsyncStorage.setItem(STREAK_KEY, JSON.stringify(next));
+    await setScopedAsyncItem(
+      USER_SCOPED_KEYS.studyStreak,
+      JSON.stringify(next),
+      userId
+    );
     return next.count;
   }
 
@@ -150,17 +155,16 @@ async function updateStreak() {
   const dayGap = Math.round((current - previous) / (24 * 60 * 60 * 1000));
   const nextCount = dayGap === 1 ? (parsed.count || 0) + 1 : 1;
   const next = { count: nextCount, lastDate: today };
-  await AsyncStorage.setItem(STREAK_KEY, JSON.stringify(next));
+  await setScopedAsyncItem(
+    USER_SCOPED_KEYS.studyStreak,
+    JSON.stringify(next),
+    userId
+  );
   return next.count;
 }
 
-async function getLastActivity() {
-  const raw = await AsyncStorage.getItem(LAST_ACTIVITY_KEY);
-  return raw ? JSON.parse(raw) : null;
-}
-
-async function getExploredSubjectsCount() {
-  const raw = await AsyncStorage.getItem(EXPLORED_SUBJECTS_KEY);
+async function getExploredSubjectsCount(userId) {
+  const raw = await getScopedAsyncItem(USER_SCOPED_KEYS.exploredSubjects, userId);
   if (!raw) {
     return 0;
   }
@@ -397,9 +401,9 @@ export default function HomeScreen({ navigation }) {
         }
 
         const [streak, exploredCount, activity] = await Promise.all([
-          updateStreak(),
-          getExploredSubjectsCount(),
-          getLastActivity(),
+          updateStreak(user?._id),
+          getExploredSubjectsCount(user?._id),
+          getLastStudyActivity(user?._id),
         ]);
 
         setStreakCount(streak);
@@ -428,7 +432,7 @@ export default function HomeScreen({ navigation }) {
         setRefreshing(false);
       }
     },
-    [isAdmin, setUnreadCount]
+    [isAdmin, setUnreadCount, user?._id]
   );
 
   useFocusEffect(
@@ -527,19 +531,18 @@ export default function HomeScreen({ navigation }) {
     }
 
     if (item.type === "note") {
-      if (isPdfFile({ url: item.payload.fileUrl, fileName: item.payload.title })) {
-        try {
-          await openPdfExternally(item.payload.fileUrl);
-        } catch (error) {
-          setToast({ message: "Unable to open note.", type: "error" });
-        }
-        return;
+      try {
+        await openStudyResource({
+          navigation,
+          title: item.payload.title,
+          subtitle: item.payload.type,
+          url: item.payload.fileUrl,
+          fileName: item.payload.fileName,
+          mimeType: item.payload.mimeType,
+        });
+      } catch (error) {
+        setToast({ message: "Unable to open note.", type: "error" });
       }
-
-      navigation.navigate("WebViewer", {
-        title: item.payload.title,
-        url: item.payload.fileUrl,
-      });
     }
   };
 

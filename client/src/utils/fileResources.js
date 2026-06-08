@@ -89,6 +89,26 @@ export const openPdfExternally = async (url) => {
   await Linking.openURL(url);
 };
 
+export const openStudyResource = async ({
+  navigation,
+  title,
+  subtitle,
+  url,
+  fileName,
+  mimeType,
+}) => {
+  if (isPdfFile({ url, mimeType, fileName })) {
+    await openPdfExternally(url);
+    return;
+  }
+
+  navigation.navigate("WebViewer", {
+    title,
+    subtitle,
+    url,
+  });
+};
+
 export const downloadAndOpenFile = async ({
   url,
   fileName,

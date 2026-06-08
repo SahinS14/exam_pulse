@@ -16,6 +16,8 @@ import PageSkeleton from "../components/PageSkeleton";
 import SectionHeader from "../components/SectionHeader";
 import StaggeredItem from "../components/StaggeredItem";
 import { EmptyState, ErrorState } from "../components/ScreenState";
+import { useAuthStore } from "../store/authStore";
+import { recordStudyActivity } from "../utils/studyActivity";
 import { useResponsiveLayout } from "../utils/layout";
 import {
   fontWeights,
@@ -31,6 +33,7 @@ export default function TopicListScreen({ navigation, route }) {
   const layout = useResponsiveLayout();
   const compactLayout = layout.width < 390;
   const { module } = route.params;
+  const userId = useAuthStore((state) => state.user?._id);
   const [topics, setTopics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -124,7 +127,21 @@ export default function TopicListScreen({ navigation, route }) {
             index={index}
           >
             <Pressable
-              onPress={() => navigation.navigate("QuestionList", { topic: item })}
+              onPress={async () => {
+                await recordStudyActivity(userId, {
+                  moduleId: module._id,
+                  moduleNumber: module.number,
+                  moduleTitle: module.title,
+                  module: {
+                    _id: module._id,
+                    number: module.number,
+                    title: module.title,
+                  },
+                  topicId: item._id,
+                  topicName: item.name,
+                });
+                navigation.navigate("QuestionList", { topic: item });
+              }}
               style={[
                 styles.card,
                 shadows.card,

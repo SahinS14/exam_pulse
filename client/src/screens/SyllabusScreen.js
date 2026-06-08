@@ -10,7 +10,7 @@ import { ErrorState } from "../components/ScreenState";
 import {
   downloadAndOpenFile,
   isPdfFile,
-  openPdfExternally,
+  openStudyResource,
 } from "../utils/fileResources";
 import { useResponsiveLayout } from "../utils/layout";
 import {
@@ -139,15 +139,13 @@ export default function SyllabusScreen({ navigation, route }) {
 
   const handleOpen = async () => {
     try {
-      if (syllabusIsPdf) {
-        await openPdfExternally(syllabus.syllabusFileUrl);
-        return;
-      }
-
-      navigation.navigate("WebViewer", {
+      await openStudyResource({
+        navigation,
         title: `${subject.name} Syllabus`,
         subtitle: "Subject reference file",
         url: syllabus.syllabusFileUrl,
+        fileName: syllabus.syllabusFileName,
+        mimeType: syllabus.syllabusMimeType,
       });
     } catch (openError) {
       Alert.alert("Open failed", "Unable to open this syllabus file right now.");

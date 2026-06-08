@@ -19,7 +19,7 @@ import { ErrorState } from "../components/ScreenState";
 import {
   downloadAndOpenFile,
   isPdfFile,
-  openPdfExternally,
+  openStudyResource,
 } from "../utils/fileResources";
 import { useResponsiveLayout } from "../utils/layout";
 import {
@@ -84,7 +84,13 @@ function NotesSkeleton({ colors, layout }) {
 export default function NotesScreen({ navigation, route }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
-  const { module } = route.params;
+  const module =
+    route.params?.module ||
+    {
+      _id: route.params?.moduleId,
+      number: route.params?.moduleNumber,
+      title: route.params?.moduleTitle || "Module",
+    };
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -134,14 +140,13 @@ export default function NotesScreen({ navigation, route }) {
 
   const handleOpen = async (item) => {
     try {
-      if (isPdfFile({ url: item.fileUrl, mimeType: item.mimeType, fileName: item.fileName })) {
-        await openPdfExternally(item.fileUrl);
-        return;
-      }
-
-      navigation.navigate("WebViewer", {
+      await openStudyResource({
+        navigation,
         title: item.title,
+        subtitle: item.type,
         url: item.fileUrl,
+        fileName: item.fileName,
+        mimeType: item.mimeType,
       });
     } catch (openError) {
       Alert.alert("Open failed", "Unable to open this file right now.");

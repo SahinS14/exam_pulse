@@ -10,6 +10,6 @@ const moduleSchema = new mongoose.Schema({
 });
 
 moduleSchema.index({ subjectId: 1 });
-moduleSchema.index({ subjectId: 1, number: 1 });
+moduleSchema.index({ subjectId: 1, number: 1 }, { unique: true });
 
 module.exports = mongoose.model("Module", moduleSchema);

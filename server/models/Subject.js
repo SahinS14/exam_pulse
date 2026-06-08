@@ -16,7 +16,10 @@ const subjectSchema = new mongoose.Schema({
 });
 
 subjectSchema.index({ semesterId: 1 });
-subjectSchema.index({ semesterId: 1, name: 1 });
+subjectSchema.index(
+  { semesterId: 1, name: 1 },
+  { unique: true, collation: { locale: "en", strength: 2 } }
+);
 subjectSchema.index({ name: "text" });
 
 module.exports = mongoose.model("Subject", subjectSchema);

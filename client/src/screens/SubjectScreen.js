@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   FlatList,
   Pressable,
@@ -11,13 +10,15 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getModules, getSubjects } from "../api/content";
+import { getSubjects } from "../api/content";
 import AnimatedScreenView from "../components/AnimatedScreenView";
 import EmptyState from "../components/EmptyState";
 import PageSkeleton from "../components/PageSkeleton";
 import SectionHeader from "../components/SectionHeader";
 import StaggeredItem from "../components/StaggeredItem";
 import { ErrorState } from "../components/ScreenState";
+import { useAuthStore } from "../store/authStore";
+import { recordStudyActivity } from "../utils/studyActivity";
 import { useResponsiveLayout } from "../utils/layout";
 import {
   fontWeights,
@@ -27,8 +28,12 @@ import {
   typography,
   useAppTheme,
 } from "../utils/theme";
+import {
+  USER_SCOPED_KEYS,
+  getScopedAsyncItem,
+  setScopedAsyncItem,
+} from "../utils/userScopedState";
 
-const EXPLORED_SUBJECTS_KEY = "exploredSubjectIds";
 const DOT_COLORS = ["#4F46E5", "#10B981", "#F59E0B", "#8B5CF6", "#EF4444", "#14B8A6"];
 
 export default function SubjectScreen({ navigation, route }) {
@@ -36,24 +41,28 @@ export default function SubjectScreen({ navigation, route }) {
   const layout = useResponsiveLayout();
   const compactLayout = layout.width < 390;
   const { branch, semester } = route.params;
+  const userId = useAuthStore((state) => state.user?._id);
   const [subjects, setSubjects] = useState([]);
-  const [moduleCountMap, setModuleCountMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   const rememberSubject = useCallback(async (subject) => {
     try {
-      const raw = await AsyncStorage.getItem(EXPLORED_SUBJECTS_KEY);
+      const raw = await getScopedAsyncItem(USER_SCOPED_KEYS.exploredSubjects, userId);
       const current = raw ? JSON.parse(raw) : [];
       const next = Array.isArray(current)
         ? Array.from(new Set([...current, subject._id]))
         : [subject._id];
-      await AsyncStorage.setItem(EXPLORED_SUBJECTS_KEY, JSON.stringify(next));
+      await setScopedAsyncItem(
+        USER_SCOPED_KEYS.exploredSubjects,
+        JSON.stringify(next),
+        userId
+      );
     } catch (storageError) {
       // Non-blocking local UX storage.
     }
-  }, []);
+  }, [userId]);
 
   const loadSubjects = useCallback(async (isRefresh = false) => {
     try {
@@ -65,19 +74,6 @@ export default function SubjectScreen({ navigation, route }) {
       }
       const data = await getSubjects(semester._id);
       setSubjects(data);
-
-      const countEntries = await Promise.all(
-        data.map(async (subject) => {
-          try {
-            const modules = await getModules(subject._id);
-            return [subject._id, modules.length];
-          } catch (moduleError) {
-            return [subject._id, 0];
-          }
-        })
-      );
-
-      setModuleCountMap(Object.fromEntries(countEntries));
     } catch (loadError) {
       setError(loadError.response?.data?.message || "Failed to load subjects.");
     } finally {
@@ -158,6 +154,20 @@ export default function SubjectScreen({ navigation, route }) {
             <Pressable
               onPress={async () => {
                 await rememberSubject(item);
+                await recordStudyActivity(userId, {
+                  branchId: branch?._id || null,
+                  branchName: branch?.name || null,
+                  semesterId: semester._id,
+                  semesterNumber: semester.number,
+                  subjectId: item._id,
+                  subjectName: item.name,
+                  moduleId: null,
+                  moduleNumber: null,
+                  moduleTitle: null,
+                  module: null,
+                  topicId: null,
+                  topicName: null,
+                });
                 navigation.navigate("Module", { subject: item });
               }}
               style={[
@@ -199,8 +209,8 @@ export default function SubjectScreen({ navigation, route }) {
                   numberOfLines={1}
                   style={[styles.cardSubtitle, compactLayout && styles.cardSubtitleCompact, { color: colors.textSecondary }]}
                 >
-                  {`${moduleCountMap[item._id] || 0} Module${
-                    moduleCountMap[item._id] === 1 ? "" : "s"
+                  {`${Number(item.moduleCount) || 0} Module${
+                    Number(item.moduleCount) === 1 ? "" : "s"
                   } available`}
                 </Text>
               </View>

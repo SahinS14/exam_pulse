@@ -277,7 +277,11 @@ export default function AdminEntityManagerScreen({ route }) {
             await config.remove(item._id);
             await loadData();
           } catch (error) {
-            Alert.alert("Delete failed", "Please try again.");
+            const message =
+              error.response?.data?.errors?.[0]?.message ||
+              error.response?.data?.message ||
+              "Please try again.";
+            Alert.alert("Delete failed", message);
           }
         },
       },

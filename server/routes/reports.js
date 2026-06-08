@@ -1,6 +1,7 @@
 const express = require("express");
 
 const { createRateLimiter } = require("../middleware/rateLimit");
+const Question = require("../models/Question");
 const Report = require("../models/Report");
 const { protect } = require("../middleware/authMiddleware");
 const accessCheck = require("../middleware/accessCheck");
@@ -22,19 +23,43 @@ router.post(
   reportRateLimit,
   validateReportBody,
   async (req, res) => {
-  try {
-    const { questionId, reason } = req.body;
+    try {
+      const { questionId, reason } = req.body;
+      const question = await Question.findById(questionId).select("_id");
 
-    const report = await Report.create({
-      userId: req.user._id,
-      questionId,
-      reason,
-    });
+      if (!question) {
+        return res.status(404).json({
+          message: "Question not found",
+        });
+      }
 
-    return res.status(201).json(report);
-  } catch (error) {
-    return res.status(500).json({ message: "Failed to submit report" });
-  }
+      const existingReport = await Report.findOne({
+        userId: req.user._id,
+        questionId,
+      });
+
+      if (existingReport) {
+        return res.status(409).json({
+          message: "You already reported this question.",
+        });
+      }
+
+      const report = await Report.create({
+        userId: req.user._id,
+        questionId,
+        reason,
+      });
+
+      return res.status(201).json(report);
+    } catch (error) {
+      if (error?.code === 11000) {
+        return res.status(409).json({
+          message: "You already reported this question.",
+        });
+      }
+
+      return res.status(500).json({ message: "Failed to submit report" });
+    }
   }
 );
 

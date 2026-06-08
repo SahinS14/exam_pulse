@@ -18,6 +18,6 @@ const reportSchema = new mongoose.Schema({
 
 reportSchema.index({ status: 1 });
 reportSchema.index({ questionId: 1, status: 1 });
-reportSchema.index({ userId: 1, questionId: 1 });
+reportSchema.index({ userId: 1, questionId: 1 }, { unique: true });
 
 module.exports = mongoose.model("Report", reportSchema);

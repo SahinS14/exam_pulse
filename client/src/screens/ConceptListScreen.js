@@ -37,7 +37,13 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 export default function ConceptListScreen({ navigation, route }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
-  const { module } = route.params;
+  const module =
+    route.params?.module ||
+    {
+      _id: route.params?.moduleId,
+      number: route.params?.moduleNumber,
+      title: route.params?.moduleTitle || "Module",
+    };
   const [concepts, setConcepts] = useState([]);
   const [expandedId, setExpandedId] = useState(null);
   const [loading, setLoading] = useState(true);

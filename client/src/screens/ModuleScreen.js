@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   FlatList,
   Pressable,
@@ -17,16 +16,17 @@ import PageSkeleton from "../components/PageSkeleton";
 import SectionHeader from "../components/SectionHeader";
 import StaggeredItem from "../components/StaggeredItem";
 import { EmptyState, ErrorState } from "../components/ScreenState";
+import { useAuthStore } from "../store/authStore";
+import { recordStudyActivity } from "../utils/studyActivity";
 import { useAppTheme, fontWeights, radius, shadows, spacing, typography } from "../utils/theme";
 import { useResponsiveLayout } from "../utils/layout";
-
-const LAST_ACTIVITY_KEY = "lastStudyActivity";
 
 export default function ModuleScreen({ navigation, route }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
   const compactLayout = layout.width < 390;
   const { subject } = route.params;
+  const userId = useAuthStore((state) => state.user?._id);
   const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -34,23 +34,24 @@ export default function ModuleScreen({ navigation, route }) {
 
   const rememberModule = useCallback(async (module) => {
     try {
-      await AsyncStorage.setItem(
-        LAST_ACTIVITY_KEY,
-        JSON.stringify({
-          subjectName: subject.name,
-          moduleNumber: module.number,
-          moduleTitle: module.title,
-          module: {
-            _id: module._id,
-            number: module.number,
-            title: module.title,
-          },
-        })
-      );
+      await recordStudyActivity(userId, {
+        subjectId: subject._id,
+        subjectName: subject.name,
+        moduleId: module._id,
+        moduleNumber: module.number,
+        moduleTitle: module.title,
+        module: {
+          _id: module._id,
+          number: module.number,
+          title: module.title,
+        },
+        topicId: null,
+        topicName: null,
+      });
     } catch (error) {
       // Local activity memory should not block navigation.
     }
-  }, [subject.name]);
+  }, [subject._id, subject.name, userId]);
 
   const loadModules = useCallback(async (isRefresh = false) => {
     try {

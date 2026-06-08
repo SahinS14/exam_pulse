@@ -28,6 +28,8 @@ router.get("/recent-updates", protect, accessCheck, async (req, res) => {
         {
           title: 1,
           fileUrl: 1,
+          fileName: 1,
+          mimeType: 1,
           type: 1,
           uploadedAt: 1,
         }

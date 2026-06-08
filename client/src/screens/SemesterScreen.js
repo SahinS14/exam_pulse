@@ -10,7 +10,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getSemesters, getSubjects } from "../api/content";
+import { getSemesters } from "../api/content";
 import AnimatedScreenView from "../components/AnimatedScreenView";
 import EmptyState from "../components/EmptyState";
 import PageSkeleton from "../components/PageSkeleton";
@@ -18,6 +18,8 @@ import SectionHeader from "../components/SectionHeader";
 import StaggeredItem from "../components/StaggeredItem";
 import { ErrorState } from "../components/ScreenState";
 import { useAppStore } from "../store/appStore";
+import { useAuthStore } from "../store/authStore";
+import { recordStudyActivity } from "../utils/studyActivity";
 import { useResponsiveLayout } from "../utils/layout";
 import {
   fontWeights,
@@ -32,9 +34,9 @@ export default function SemesterScreen({ navigation, route }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
   const { branch } = route.params;
+  const userId = useAuthStore((state) => state.user?._id);
   const setSelectedSemester = useAppStore((state) => state.setSelectedSemester);
   const [semesters, setSemesters] = useState([]);
-  const [subjectCountMap, setSubjectCountMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -50,19 +52,6 @@ export default function SemesterScreen({ navigation, route }) {
       const data = await getSemesters(branch._id);
       const sorted = data.sort((left, right) => left.number - right.number);
       setSemesters(sorted);
-
-      const countEntries = await Promise.all(
-        sorted.map(async (semester) => {
-          try {
-            const subjects = await getSubjects(semester._id);
-            return [semester._id, subjects.length];
-          } catch (subjectError) {
-            return [semester._id, 0];
-          }
-        })
-      );
-
-      setSubjectCountMap(Object.fromEntries(countEntries));
     } catch (loadError) {
       setError(loadError.response?.data?.message || "Failed to load semesters.");
     } finally {
@@ -144,14 +133,28 @@ export default function SemesterScreen({ navigation, route }) {
         }
         renderItem={({ item, index }) => {
           const active = !item.placeholder;
-          const subjectCount = active ? subjectCountMap[item._id] || 0 : 0;
+          const subjectCount = active ? Number(item.subjectCount) || 0 : 0;
 
           return (
             <StaggeredItem style={styles.cardWrap} index={index}>
               <Pressable
                 disabled={!active}
-                onPress={() => {
-                  setSelectedSemester(item);
+                onPress={async () => {
+                  await recordStudyActivity(userId, {
+                    branchId: branch._id,
+                    branchName: branch.name,
+                    semesterId: item._id,
+                    semesterNumber: item.number,
+                    subjectId: null,
+                    subjectName: null,
+                    moduleId: null,
+                    moduleNumber: null,
+                    moduleTitle: null,
+                    module: null,
+                    topicId: null,
+                    topicName: null,
+                  });
+                  await setSelectedSemester(item);
                   navigation.navigate("Subject", { branch, semester: item });
                 }}
                 style={[

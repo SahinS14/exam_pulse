@@ -18,7 +18,12 @@ import {
 
 export default function QuestionListScreen({ navigation, route }) {
   const { colors } = useAppTheme();
-  const { topic } = route.params;
+  const topic =
+    route.params?.topic ||
+    {
+      _id: route.params?.topicId,
+      name: route.params?.topicName || "Question Bank",
+    };
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

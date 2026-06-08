@@ -1,16 +1,19 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 
 import { registerPushToken } from "../api/notifications";
+import { navigateToRoute, resetToRoute } from "../navigation/navigationRef";
+import { resolveNotificationRoute } from "../navigation/linking";
 import { useAuthStore } from "../store/authStore";
 import { useNotificationStore } from "../store/notificationStore";
-
-const ACCESS_REMINDER_KEY = "accessReminderExpiry";
-const ACCESS_REMINDER_ID_KEY = "accessReminderId";
+import {
+  USER_SCOPED_KEYS,
+  getScopedSecureItem,
+  setScopedSecureItem,
+} from "../utils/userScopedState";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -52,18 +55,24 @@ async function registerForPushNotificationsAsync() {
   return token.data;
 }
 
-async function scheduleAccessExpiryReminder(accessExpiry) {
+async function scheduleAccessExpiryReminder(accessExpiry, userId) {
   if (!accessExpiry) {
     return;
   }
 
-  const savedExpiry = await SecureStore.getItemAsync(ACCESS_REMINDER_KEY);
+  const savedExpiry = await getScopedSecureItem(
+    USER_SCOPED_KEYS.accessReminderExpiry,
+    userId
+  );
 
   if (savedExpiry === accessExpiry) {
     return;
   }
 
-  const existingReminderId = await SecureStore.getItemAsync(ACCESS_REMINDER_ID_KEY);
+  const existingReminderId = await getScopedSecureItem(
+    USER_SCOPED_KEYS.accessReminderId,
+    userId
+  );
 
   if (existingReminderId) {
     await Notifications.cancelScheduledNotificationAsync(existingReminderId).catch(() => {});
@@ -96,16 +105,62 @@ async function scheduleAccessExpiryReminder(accessExpiry) {
     },
   });
 
-  await SecureStore.setItemAsync(ACCESS_REMINDER_KEY, accessExpiry);
-  await SecureStore.setItemAsync(ACCESS_REMINDER_ID_KEY, identifier);
+  await setScopedSecureItem(USER_SCOPED_KEYS.accessReminderExpiry, accessExpiry, userId);
+  await setScopedSecureItem(USER_SCOPED_KEYS.accessReminderId, identifier, userId);
 }
 
 export default function NotificationBootstrap() {
   const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
   const accessExpiry = useAuthStore((state) => state.accessExpiry);
+  const handleAccessExpired = useAuthStore((state) => state.handleAccessExpired);
   const incrementUnreadCount = useNotificationStore((state) => state.incrementUnreadCount);
   const clearUnreadCount = useNotificationStore((state) => state.clearUnreadCount);
+  const handledResponseIds = useRef(new Set());
+
+  const hasActiveAccess = useCallback(() => {
+    if (!user || user.role === "admin") {
+      return true;
+    }
+
+    if (!accessExpiry) {
+      return false;
+    }
+
+    return new Date(accessExpiry).getTime() > Date.now();
+  }, [accessExpiry, user]);
+
+  const handleNotificationResponse = useCallback(
+    async (response) => {
+      const identifier = response?.notification?.request?.identifier;
+
+      if (identifier && handledResponseIds.current.has(identifier)) {
+        return;
+      }
+
+      if (identifier) {
+        handledResponseIds.current.add(identifier);
+      }
+
+      if (!token || !user?._id) {
+        resetToRoute("Login");
+        return;
+      }
+
+      const target = resolveNotificationRoute(
+        response?.notification?.request?.content?.data || {}
+      );
+
+      if (target.requiresPremium && !hasActiveAccess()) {
+        await handleAccessExpired();
+        resetToRoute("Paywall");
+        return;
+      }
+
+      navigateToRoute(target.name, target.params);
+    },
+    [handleAccessExpired, hasActiveAccess, token, user?._id]
+  );
 
   useEffect(() => {
     if (!token || !user?._id) {
@@ -121,6 +176,40 @@ export default function NotificationBootstrap() {
       receivedSubscription.remove();
     };
   }, [clearUnreadCount, incrementUnreadCount, token, user?._id]);
+
+  useEffect(() => {
+    let active = true;
+
+    const hydrateLastResponse = async () => {
+      if (!token || !user?._id) {
+        return;
+      }
+
+      const response = await Notifications.getLastNotificationResponseAsync();
+
+      if (!active || !response) {
+        return;
+      }
+
+      await handleNotificationResponse(response);
+
+      if (typeof Notifications.clearLastNotificationResponseAsync === "function") {
+        await Notifications.clearLastNotificationResponseAsync().catch(() => {});
+      }
+    };
+
+    hydrateLastResponse();
+
+    const responseSubscription =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        handleNotificationResponse(response).catch(() => {});
+      });
+
+    return () => {
+      active = false;
+      responseSubscription.remove();
+    };
+  }, [handleNotificationResponse, token, user?._id]);
 
   useEffect(() => {
     if (!token || !user?._id) {
@@ -140,7 +229,7 @@ export default function NotificationBootstrap() {
       }
 
       if (active && user.role !== "admin") {
-        await scheduleAccessExpiryReminder(accessExpiry);
+        await scheduleAccessExpiryReminder(accessExpiry, user._id);
       }
     };
 

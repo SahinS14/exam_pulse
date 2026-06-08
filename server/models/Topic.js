@@ -9,6 +9,9 @@ const topicSchema = new mongoose.Schema({
 });
 
 topicSchema.index({ moduleId: 1 });
-topicSchema.index({ moduleId: 1, name: 1 });
+topicSchema.index(
+  { moduleId: 1, name: 1 },
+  { unique: true, collation: { locale: "en", strength: 2 } }
+);
 
 module.exports = mongoose.model("Topic", topicSchema);

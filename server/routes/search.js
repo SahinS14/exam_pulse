@@ -9,6 +9,9 @@ const Concept = require("../models/Concept");
 const Note = require("../models/Note");
 const { protect } = require("../middleware/authMiddleware");
 const accessCheck = require("../middleware/accessCheck");
+const {
+  getPaginationParams,
+} = require("../utils/pagination");
 
 const router = express.Router();
 
@@ -17,6 +20,7 @@ const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 router.get("/", protect, accessCheck, async (req, res) => {
   try {
     const { q, branchId, semesterId } = req.query;
+    const pagination = getPaginationParams(req.query);
 
     if (!q) {
       return res.status(400).json({
@@ -51,15 +55,25 @@ router.get("/", protect, accessCheck, async (req, res) => {
     const scopedModuleFilter = moduleIds ? { $in: moduleIds } : { $exists: true };
     const scopedTopicFilter = topicIds ? { $in: topicIds } : { $exists: true };
 
-    const [questions, concepts, notes] = await Promise.all([
-      Question.find({
-        topicId: scopedTopicFilter,
-        $or: [
-          { questionText: searchRegex },
-          { solutionText: searchRegex },
-          { tags: searchRegex },
-        ],
-      }).populate({
+    const questionFilter = {
+      topicId: scopedTopicFilter,
+      $or: [
+        { questionText: searchRegex },
+        { solutionText: searchRegex },
+        { tags: searchRegex },
+      ],
+    };
+    const conceptFilter = {
+      moduleId: scopedModuleFilter,
+      $or: [{ title: searchRegex }, { explanation: searchRegex }],
+    };
+    const noteFilter = {
+      moduleId: scopedModuleFilter,
+      $or: [{ title: searchRegex }, { type: searchRegex }],
+    };
+
+    const buildQuestionQuery = () =>
+      Question.find(questionFilter).populate({
         path: "topicId",
         populate: {
           path: "moduleId",
@@ -67,28 +81,48 @@ router.get("/", protect, accessCheck, async (req, res) => {
             path: "subjectId",
           },
         },
-      }),
-      Concept.find({
-        moduleId: scopedModuleFilter,
-        $or: [{ title: searchRegex }, { explanation: searchRegex }],
-      }).populate({
+      });
+    const buildConceptQuery = () =>
+      Concept.find(conceptFilter).populate({
         path: "moduleId",
         populate: {
           path: "subjectId",
         },
-      }),
-      Note.find({
-        moduleId: scopedModuleFilter,
-        $or: [{ title: searchRegex }, { type: searchRegex }],
-      }).populate({
+      });
+    const buildNoteQuery = () =>
+      Note.find(noteFilter).populate({
         path: "moduleId",
         populate: {
           path: "subjectId",
         },
-      }),
-    ]);
+      });
 
-    return res.json({
+    let questions;
+    let concepts;
+    let notes;
+    let totals = null;
+
+    if (pagination) {
+      const { skip, limit } = pagination;
+      [questions, concepts, notes, totals] = await Promise.all([
+        buildQuestionQuery().skip(skip).limit(limit),
+        buildConceptQuery().skip(skip).limit(limit),
+        buildNoteQuery().skip(skip).limit(limit),
+        Promise.all([
+          Question.countDocuments(questionFilter),
+          Concept.countDocuments(conceptFilter),
+          Note.countDocuments(noteFilter),
+        ]),
+      ]);
+    } else {
+      [questions, concepts, notes] = await Promise.all([
+        buildQuestionQuery(),
+        buildConceptQuery(),
+        buildNoteQuery(),
+      ]);
+    }
+
+    const response = {
       questions: questions.map((question) => ({
         ...question.toObject(),
         topicName: question.topicId?.name || null,
@@ -105,6 +139,30 @@ router.get("/", protect, accessCheck, async (req, res) => {
         moduleTitle: note.moduleId?.title || null,
         subjectName: note.moduleId?.subjectId?.name || null,
       })),
+    };
+
+    if (!pagination) {
+      return res.json(response);
+    }
+
+    const [questionTotal, conceptTotal, noteTotal] = totals;
+
+    return res.json({
+      ...response,
+      pagination: {
+        page: pagination.page,
+        limit: pagination.limit,
+        totals: {
+          questions: questionTotal,
+          concepts: conceptTotal,
+          notes: noteTotal,
+        },
+        totalPages: {
+          questions: Math.max(1, Math.ceil(questionTotal / pagination.limit)),
+          concepts: Math.max(1, Math.ceil(conceptTotal / pagination.limit)),
+          notes: Math.max(1, Math.ceil(noteTotal / pagination.limit)),
+        },
+      },
     });
   } catch (error) {
     return res.status(500).json({ message: "Search failed" });

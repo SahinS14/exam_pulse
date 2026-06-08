@@ -9,7 +9,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
@@ -22,8 +21,9 @@ import SectionHeader from "../components/SectionHeader";
 import SkeletonLoader from "../components/SkeletonLoader";
 import StatBadge from "../components/StatBadge";
 import StaggeredItem from "../components/StaggeredItem";
+import { useAuthStore } from "../store/authStore";
 import { useAppStore } from "../store/appStore";
-import { isPdfFile, openPdfExternally } from "../utils/fileResources";
+import { openStudyResource } from "../utils/fileResources";
 import { useResponsiveLayout } from "../utils/layout";
 import {
   fontWeights,
@@ -33,8 +33,12 @@ import {
   typography,
   useAppTheme,
 } from "../utils/theme";
+import {
+  USER_SCOPED_KEYS,
+  getScopedAsyncItem,
+  setScopedAsyncItem,
+} from "../utils/userScopedState";
 
-const RECENT_SEARCHES_KEY = "recentSearches";
 const POPULAR_TOPICS = [
   "SQL",
   "Normalization",
@@ -44,8 +48,8 @@ const POPULAR_TOPICS = [
   "ER Model",
 ];
 
-async function readRecentSearches() {
-  const raw = await AsyncStorage.getItem(RECENT_SEARCHES_KEY);
+async function readRecentSearches(userId) {
+  const raw = await getScopedAsyncItem(USER_SCOPED_KEYS.recentSearches, userId);
   if (!raw) {
     return [];
   }
@@ -58,10 +62,14 @@ async function readRecentSearches() {
   }
 }
 
-async function saveRecentSearch(term) {
-  const current = await readRecentSearches();
+async function saveRecentSearch(term, userId) {
+  const current = await readRecentSearches(userId);
   const next = [term, ...current.filter((item) => item !== term)].slice(0, 6);
-  await AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
+  await setScopedAsyncItem(
+    USER_SCOPED_KEYS.recentSearches,
+    JSON.stringify(next),
+    userId
+  );
   return next;
 }
 
@@ -170,6 +178,7 @@ function ResultCard({ icon, iconTint, title, subtitle, badge, onPress }) {
 export default function SearchScreen({ navigation }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
+  const userId = useAuthStore((state) => state.user?._id);
   const selectedBranch = useAppStore((state) => state.selectedBranch);
   const selectedSemester = useAppStore((state) => state.selectedSemester);
 
@@ -185,8 +194,8 @@ export default function SearchScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      readRecentSearches().then(setRecentSearches).catch(() => setRecentSearches([]));
-    }, [])
+      readRecentSearches(userId).then(setRecentSearches).catch(() => setRecentSearches([]));
+    }, [userId])
   );
 
   useEffect(() => {
@@ -209,7 +218,7 @@ export default function SearchScreen({ navigation }) {
           semesterId: selectedSemester?._id,
         });
         setResults(data);
-        const nextRecent = await saveRecentSearch(normalized);
+        const nextRecent = await saveRecentSearch(normalized, userId);
         setRecentSearches(nextRecent);
       } catch (loadError) {
         setError(loadError.response?.data?.message || "Search failed.");
@@ -219,7 +228,7 @@ export default function SearchScreen({ navigation }) {
     }, 300);
 
     return () => clearTimeout(timeoutId);
-  }, [query, selectedBranch, selectedSemester]);
+  }, [query, selectedBranch, selectedSemester, userId]);
 
   const hasResults = useMemo(
     () =>
@@ -395,15 +404,13 @@ export default function SearchScreen({ navigation }) {
                           .join(" • ")}
                         badge={item.type}
                         onPress={async () => {
-                          if (isPdfFile({ url: item.fileUrl, fileName: item.title })) {
-                            await openPdfExternally(item.fileUrl);
-                            return;
-                          }
-
-                          navigation.navigate("WebViewer", {
+                          await openStudyResource({
+                            navigation,
                             title: item.title,
                             subtitle: item.type,
                             url: item.fileUrl,
+                            fileName: item.fileName,
+                            mimeType: item.mimeType,
                           });
                         }}
                       />

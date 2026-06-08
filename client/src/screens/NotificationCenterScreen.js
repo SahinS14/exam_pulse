@@ -20,6 +20,7 @@ import AnimatedScreenView from "../components/AnimatedScreenView";
 import EmptyState from "../components/EmptyState";
 import PageSkeleton from "../components/PageSkeleton";
 import { ErrorState } from "../components/ScreenState";
+import { resolveNotificationRoute } from "../navigation/linking";
 import StaggeredItem from "../components/StaggeredItem";
 import Toast from "../components/Toast";
 import { useNotificationStore } from "../store/notificationStore";
@@ -87,7 +88,7 @@ const TYPE_META = {
   },
 };
 
-export default function NotificationCenterScreen() {
+export default function NotificationCenterScreen({ navigation }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
   const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
@@ -224,6 +225,9 @@ export default function NotificationCenterScreen() {
                     setItems(nextItems);
                     hydrateUnreadCount(nextItems);
                   }
+
+                  const destination = resolveNotificationRoute(item.data);
+                  navigation.navigate(destination.name, destination.params);
                 }}
                 style={[
                   styles.card,

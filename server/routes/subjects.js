@@ -1,6 +1,7 @@
 const express = require("express");
 
 const Subject = require("../models/Subject");
+const Module = require("../models/Module");
 const { protect } = require("../middleware/authMiddleware");
 const accessCheck = require("../middleware/accessCheck");
 
@@ -28,8 +29,37 @@ router.get("/:subjectId/syllabus", protect, accessCheck, async (req, res) => {
 
 router.get("/:semesterId", protect, accessCheck, async (req, res) => {
   try {
-    const subjects = await Subject.find({ semesterId: req.params.semesterId });
-    return res.json(subjects);
+    const filter = { semesterId: req.params.semesterId };
+    const subjects = await Subject.find(filter).sort({ name: 1 }).lean();
+
+    if (!subjects.length) {
+      return res.json([]);
+    }
+
+    const subjectIds = subjects.map((subject) => subject._id);
+    const moduleCounts = await Module.aggregate([
+      {
+        $match: {
+          subjectId: { $in: subjectIds },
+        },
+      },
+      {
+        $group: {
+          _id: "$subjectId",
+          total: { $sum: 1 },
+        },
+      },
+    ]);
+    const countMap = new Map(
+      moduleCounts.map((item) => [String(item._id), item.total])
+    );
+
+    return res.json(
+      subjects.map((subject) => ({
+        ...subject,
+        moduleCount: countMap.get(String(subject._id)) || 0,
+      }))
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch subjects" });
   }

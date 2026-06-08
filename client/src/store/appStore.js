@@ -1,21 +1,23 @@
-import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
 
-const APP_CONTEXT_KEY = "appBrowseContext";
+import {
+  USER_SCOPED_KEYS,
+  getScopedSecureItem,
+  setScopedSecureItem,
+  removeScopedSecureItem,
+} from "../utils/userScopedState";
 
-const saveContext = async ({ selectedBranch, selectedSemester }) => {
-  await SecureStore.setItemAsync(
-    APP_CONTEXT_KEY,
+const saveContext = async ({ selectedBranch, selectedSemester }) =>
+  setScopedSecureItem(
+    USER_SCOPED_KEYS.browseContext,
     JSON.stringify({
       selectedBranch,
       selectedSemester,
     })
   );
-};
 
-const clearContextStorage = async () => {
-  await SecureStore.deleteItemAsync(APP_CONTEXT_KEY);
-};
+const clearContextStorage = async () =>
+  removeScopedSecureItem(USER_SCOPED_KEYS.browseContext);
 
 export const useAppStore = create((set) => ({
   selectedBranch: null,
@@ -23,7 +25,7 @@ export const useAppStore = create((set) => ({
   hydrated: false,
   hydrateContext: async () => {
     try {
-      const storedContext = await SecureStore.getItemAsync(APP_CONTEXT_KEY);
+      const storedContext = await getScopedSecureItem(USER_SCOPED_KEYS.browseContext);
 
       if (!storedContext) {
         set({

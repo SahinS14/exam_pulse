@@ -41,8 +41,28 @@ require("./models/UserNotification");
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
 const HOST = "0.0.0.0";
+const allowedOrigins = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 
-app.use(cors());
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Origin not allowed by CORS"));
+    },
+  })
+);
 app.use("/api/payment/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 
@@ -67,13 +87,17 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+app.use((error, req, res, next) => {
+  if (error?.message === "Origin not allowed by CORS") {
+    return res.status(403).json({ message: "Origin not allowed" });
+  }
+
+  return next(error);
+});
+
 const startServer = async () => {
   try {
-    if (process.env.MONGO_URI) {
-      await connectDB();
-    } else {
-      console.warn("MONGO_URI is not set. Skipping MongoDB connection.");
-    }
+    await connectDB();
 
     return app.listen(PORT, HOST, () => {
       console.log(`Server running on ${HOST}:${PORT}`);

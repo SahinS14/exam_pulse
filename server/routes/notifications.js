@@ -4,6 +4,10 @@ const { protect } = require("../middleware/authMiddleware");
 const { validateObjectIdParam } = require("../middleware/validation");
 const PushToken = require("../models/PushToken");
 const UserNotification = require("../models/UserNotification");
+const {
+  getPaginationParams,
+  buildPaginatedResponse,
+} = require("../utils/pagination");
 
 const router = express.Router();
 
@@ -39,11 +43,16 @@ router.post("/register-token", protect, async (req, res) => {
 
 router.get("/inbox", protect, async (req, res) => {
   try {
-    const notifications = await UserNotification.find({ userId: req.user._id })
+    const filter = { userId: req.user._id };
+    const pagination = getPaginationParams(req.query);
+    const query = UserNotification.find(filter)
       .populate("notificationId")
       .sort({ createdAt: -1 })
-      .limit(50)
       .lean();
+
+    const notifications = pagination
+      ? await query.skip(pagination.skip).limit(pagination.limit)
+      : await query.limit(50);
 
     const items = notifications
       .filter((item) => item.notificationId)
@@ -60,7 +69,20 @@ router.get("/inbox", protect, async (req, res) => {
         sentAt: item.notificationId.sentAt || item.notificationId.createdAt,
       }));
 
-    return res.json(items);
+    if (!pagination) {
+      return res.json(items);
+    }
+
+    const total = await UserNotification.countDocuments(filter);
+
+    return res.json(
+      buildPaginatedResponse({
+        items,
+        total,
+        page: pagination.page,
+        limit: pagination.limit,
+      })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch notifications" });
   }

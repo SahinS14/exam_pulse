@@ -27,6 +27,7 @@ const Topic = require("../models/Topic");
 const Question = require("../models/Question");
 const Concept = require("../models/Concept");
 const Note = require("../models/Note");
+const Bookmark = require("../models/Bookmark");
 const User = require("../models/User");
 const Report = require("../models/Report");
 const Notification = require("../models/Notification");
@@ -35,6 +36,10 @@ const {
   uploadLocalFileToCloudinary,
   destroyCloudinaryAsset,
 } = require("../utils/cloudinaryAssets");
+const {
+  getPaginationParams,
+  buildPaginatedResponse,
+} = require("../utils/pagination");
 
 const router = express.Router();
 const adminUploadRateLimit = createRateLimiter({
@@ -151,10 +156,73 @@ const cleanupTrackedAsset = async (publicId, resourceType) => {
   }
 };
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const findCaseInsensitiveDuplicate = async ({
+  Model,
+  field,
+  value,
+  scope = {},
+  excludeId,
+}) => {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  const duplicate = await Model.findOne({
+    ...scope,
+    [field]: new RegExp(`^${escapeRegex(value.trim())}$`, "i"),
+  }).select("_id");
+
+  if (!duplicate) {
+    return null;
+  }
+
+  if (excludeId && String(duplicate._id) === String(excludeId)) {
+    return null;
+  }
+
+  return duplicate;
+};
+
+const sendConflict = (res, message) =>
+  res.status(409).json({
+    message,
+  });
+
+const sendNotFound = (res, message) =>
+  res.status(404).json({
+    message,
+  });
+
+const ensureEntityExists = async (Model, id) => Model.findById(id).select("_id");
+const buildNotificationUrl = (path, query = {}) => {
+  const params = new URLSearchParams(
+    Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+  const search = params.toString();
+  return `exampulse://${path}${search ? `?${search}` : ""}`;
+};
+
 router.get("/branches", async (req, res) => {
   try {
-    const branches = await Branch.find().sort({ name: 1 });
-    return res.json(branches);
+    const pagination = getPaginationParams(req.query);
+    const query = Branch.find().sort({ name: 1 });
+
+    if (!pagination) {
+      const branches = await query;
+      return res.json(branches);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [branches, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Branch.countDocuments(),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: branches, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch branches" });
   }
@@ -162,13 +230,27 @@ router.get("/branches", async (req, res) => {
 
 router.get("/notifications", async (req, res) => {
   try {
-    const notifications = await Notification.find({ audience: { $in: ["students", "paid-students"] } })
+    const filter = { audience: { $in: ["students", "paid-students"] } };
+    const pagination = getPaginationParams(req.query);
+    const query = Notification.find(filter)
       .sort({ createdAt: -1 })
-      .limit(50)
       .populate("createdBy", "name email")
       .lean();
 
-    return res.json(notifications);
+    if (!pagination) {
+      const notifications = await query.limit(50);
+      return res.json(notifications);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [notifications, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Notification.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: notifications, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch notifications" });
   }
@@ -183,6 +265,7 @@ router.post("/notifications", validateAdminNotificationBody, async (req, res) =>
       data: {
         type: req.body.type,
         source: "admin-manual",
+        url: buildNotificationUrl("notifications"),
       },
       createdBy: req.user._id,
       premiumOnly: false,
@@ -199,18 +282,43 @@ router.post("/notifications", validateAdminNotificationBody, async (req, res) =>
 
 router.post("/branch", validateBranchBody, async (req, res) => {
   try {
+    const duplicate = await findCaseInsensitiveDuplicate({
+      Model: Branch,
+      field: "name",
+      value: req.body.name,
+    });
+
+    if (duplicate) {
+      return sendConflict(res, "A branch with this name already exists.");
+    }
+
     const branch = await Branch.create({
       name: req.body.name.trim(),
     });
 
     return res.status(201).json(branch);
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendConflict(res, "A branch with this name already exists.");
+    }
+
     return res.status(500).json({ message: "Failed to create branch" });
   }
 });
 
 router.put("/branch/:id", validateObjectIdParam("id"), validateBranchBody, async (req, res) => {
   try {
+    const duplicate = await findCaseInsensitiveDuplicate({
+      Model: Branch,
+      field: "name",
+      value: req.body.name,
+      excludeId: req.params.id,
+    });
+
+    if (duplicate) {
+      return sendConflict(res, "A branch with this name already exists.");
+    }
+
     const branch = await Branch.findByIdAndUpdate(
       req.params.id,
       { name: req.body.name.trim() },
@@ -223,12 +331,25 @@ router.put("/branch/:id", validateObjectIdParam("id"), validateBranchBody, async
 
     return res.json(branch);
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendConflict(res, "A branch with this name already exists.");
+    }
+
     return res.status(500).json({ message: "Failed to update branch" });
   }
 });
 
 router.delete("/branch/:id", validateObjectIdParam("id"), async (req, res) => {
   try {
+    const hasSemesters = await Semester.exists({ branchId: req.params.id });
+
+    if (hasSemesters) {
+      return sendConflict(
+        res,
+        "Cannot delete this branch while semesters still belong to it."
+      );
+    }
+
     const branch = await Branch.findByIdAndDelete(req.params.id);
 
     if (!branch) {
@@ -244,8 +365,23 @@ router.delete("/branch/:id", validateObjectIdParam("id"), async (req, res) => {
 router.get("/semesters", async (req, res) => {
   try {
     const filter = req.query.branchId ? { branchId: req.query.branchId } : {};
-    const semesters = await Semester.find(filter).sort({ number: 1 });
-    return res.json(semesters);
+    const pagination = getPaginationParams(req.query);
+    const query = Semester.find(filter).sort({ number: 1 });
+
+    if (!pagination) {
+      const semesters = await query;
+      return res.json(semesters);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [semesters, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Semester.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: semesters, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch semesters" });
   }
@@ -253,6 +389,24 @@ router.get("/semesters", async (req, res) => {
 
 router.post("/semester", validateSemesterBody, async (req, res) => {
   try {
+    const branch = await ensureEntityExists(Branch, req.body.branchId);
+
+    if (!branch) {
+      return sendNotFound(res, "Branch not found");
+    }
+
+    const existingSemester = await Semester.findOne({
+      branchId: req.body.branchId,
+      number: req.body.number,
+    }).select("_id");
+
+    if (existingSemester) {
+      return sendConflict(
+        res,
+        "This semester number already exists for the selected branch."
+      );
+    }
+
     const semester = await Semester.create({
       number: req.body.number,
       branchId: req.body.branchId,
@@ -260,6 +414,13 @@ router.post("/semester", validateSemesterBody, async (req, res) => {
 
     return res.status(201).json(semester);
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendConflict(
+        res,
+        "This semester number already exists for the selected branch."
+      );
+    }
+
     return res.status(500).json({ message: "Failed to create semester" });
   }
 });
@@ -270,6 +431,25 @@ router.put(
   validateSemesterBody,
   async (req, res) => {
     try {
+      const branch = await ensureEntityExists(Branch, req.body.branchId);
+
+      if (!branch) {
+        return sendNotFound(res, "Branch not found");
+      }
+
+      const existingSemester = await Semester.findOne({
+        branchId: req.body.branchId,
+        number: req.body.number,
+        _id: { $ne: req.params.id },
+      }).select("_id");
+
+      if (existingSemester) {
+        return sendConflict(
+          res,
+          "This semester number already exists for the selected branch."
+        );
+      }
+
       const semester = await Semester.findByIdAndUpdate(
         req.params.id,
         {
@@ -285,6 +465,13 @@ router.put(
 
       return res.json(semester);
     } catch (error) {
+      if (error?.code === 11000) {
+        return sendConflict(
+          res,
+          "This semester number already exists for the selected branch."
+        );
+      }
+
       return res.status(500).json({ message: "Failed to update semester" });
     }
   }
@@ -292,6 +479,15 @@ router.put(
 
 router.delete("/semester/:id", validateObjectIdParam("id"), async (req, res) => {
   try {
+    const hasSubjects = await Subject.exists({ semesterId: req.params.id });
+
+    if (hasSubjects) {
+      return sendConflict(
+        res,
+        "Cannot delete this semester while subjects still belong to it."
+      );
+    }
+
     const semester = await Semester.findByIdAndDelete(req.params.id);
 
     if (!semester) {
@@ -309,8 +505,23 @@ router.get("/subjects", async (req, res) => {
     const filter = req.query.semesterId
       ? { semesterId: req.query.semesterId }
       : {};
-    const subjects = await Subject.find(filter).sort({ name: 1 });
-    return res.json(subjects);
+    const pagination = getPaginationParams(req.query);
+    const query = Subject.find(filter).sort({ name: 1 });
+
+    if (!pagination) {
+      const subjects = await query;
+      return res.json(subjects);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [subjects, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Subject.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: subjects, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch subjects" });
   }
@@ -318,9 +529,36 @@ router.get("/subjects", async (req, res) => {
 
 router.post("/subject", validateSubjectBody, async (req, res) => {
   try {
+    const semester = await ensureEntityExists(Semester, req.body.semesterId);
+
+    if (!semester) {
+      return sendNotFound(res, "Semester not found");
+    }
+
+    const duplicate = await findCaseInsensitiveDuplicate({
+      Model: Subject,
+      field: "name",
+      value: req.body.name,
+      scope: { semesterId: req.body.semesterId },
+    });
+
+    if (duplicate) {
+      return sendConflict(
+        res,
+        "A subject with this name already exists in the selected semester."
+      );
+    }
+
     const subject = await Subject.create(normalizeSubjectPayload(req.body));
     return res.status(201).json(subject);
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendConflict(
+        res,
+        "A subject with this name already exists in the selected semester."
+      );
+    }
+
     return res.status(500).json({ message: "Failed to create subject" });
   }
 });
@@ -331,6 +569,27 @@ router.put(
   validateSubjectBody,
   async (req, res) => {
     try {
+      const semester = await ensureEntityExists(Semester, req.body.semesterId);
+
+      if (!semester) {
+        return sendNotFound(res, "Semester not found");
+      }
+
+      const duplicate = await findCaseInsensitiveDuplicate({
+        Model: Subject,
+        field: "name",
+        value: req.body.name,
+        scope: { semesterId: req.body.semesterId },
+        excludeId: req.params.id,
+      });
+
+      if (duplicate) {
+        return sendConflict(
+          res,
+          "A subject with this name already exists in the selected semester."
+        );
+      }
+
       const subject = await Subject.findById(req.params.id);
 
       if (!subject) {
@@ -357,6 +616,13 @@ router.put(
 
       return res.json(subject);
     } catch (error) {
+      if (error?.code === 11000) {
+        return sendConflict(
+          res,
+          "A subject with this name already exists in the selected semester."
+        );
+      }
+
       return res.status(500).json({ message: "Failed to update subject" });
     }
   }
@@ -364,6 +630,15 @@ router.put(
 
 router.delete("/subject/:id", validateObjectIdParam("id"), async (req, res) => {
   try {
+    const hasModules = await Module.exists({ subjectId: req.params.id });
+
+    if (hasModules) {
+      return sendConflict(
+        res,
+        "Cannot delete this subject while modules still belong to it."
+      );
+    }
+
     const subject = await Subject.findByIdAndDelete(req.params.id);
 
     if (!subject) {
@@ -384,8 +659,23 @@ router.delete("/subject/:id", validateObjectIdParam("id"), async (req, res) => {
 router.get("/modules", async (req, res) => {
   try {
     const filter = req.query.subjectId ? { subjectId: req.query.subjectId } : {};
-    const modules = await Module.find(filter).sort({ number: 1 });
-    return res.json(modules);
+    const pagination = getPaginationParams(req.query);
+    const query = Module.find(filter).sort({ number: 1 });
+
+    if (!pagination) {
+      const modules = await query;
+      return res.json(modules);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [modules, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Module.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: modules, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch modules" });
   }
@@ -393,6 +683,24 @@ router.get("/modules", async (req, res) => {
 
 router.post("/module", validateModuleBody, async (req, res) => {
   try {
+    const subject = await ensureEntityExists(Subject, req.body.subjectId);
+
+    if (!subject) {
+      return sendNotFound(res, "Subject not found");
+    }
+
+    const existingModule = await Module.findOne({
+      subjectId: req.body.subjectId,
+      number: req.body.number,
+    }).select("_id");
+
+    if (existingModule) {
+      return sendConflict(
+        res,
+        "This module number already exists for the selected subject."
+      );
+    }
+
     const moduleDoc = await Module.create({
       number: req.body.number,
       title: req.body.title.trim(),
@@ -401,6 +709,13 @@ router.post("/module", validateModuleBody, async (req, res) => {
 
     return res.status(201).json(moduleDoc);
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendConflict(
+        res,
+        "This module number already exists for the selected subject."
+      );
+    }
+
     return res.status(500).json({ message: "Failed to create module" });
   }
 });
@@ -411,6 +726,25 @@ router.put(
   validateModuleBody,
   async (req, res) => {
     try {
+      const subject = await ensureEntityExists(Subject, req.body.subjectId);
+
+      if (!subject) {
+        return sendNotFound(res, "Subject not found");
+      }
+
+      const existingModule = await Module.findOne({
+        subjectId: req.body.subjectId,
+        number: req.body.number,
+        _id: { $ne: req.params.id },
+      }).select("_id");
+
+      if (existingModule) {
+        return sendConflict(
+          res,
+          "This module number already exists for the selected subject."
+        );
+      }
+
       const moduleDoc = await Module.findByIdAndUpdate(
         req.params.id,
         {
@@ -427,6 +761,13 @@ router.put(
 
       return res.json(moduleDoc);
     } catch (error) {
+      if (error?.code === 11000) {
+        return sendConflict(
+          res,
+          "This module number already exists for the selected subject."
+        );
+      }
+
       return res.status(500).json({ message: "Failed to update module" });
     }
   }
@@ -434,6 +775,19 @@ router.put(
 
 router.delete("/module/:id", validateObjectIdParam("id"), async (req, res) => {
   try {
+    const [hasTopics, hasConcepts, hasNotes] = await Promise.all([
+      Topic.exists({ moduleId: req.params.id }),
+      Concept.exists({ moduleId: req.params.id }),
+      Note.exists({ moduleId: req.params.id }),
+    ]);
+
+    if (hasTopics || hasConcepts || hasNotes) {
+      return sendConflict(
+        res,
+        "Cannot delete this module while topics, concepts, or notes still belong to it."
+      );
+    }
+
     const moduleDoc = await Module.findByIdAndDelete(req.params.id);
 
     if (!moduleDoc) {
@@ -449,8 +803,23 @@ router.delete("/module/:id", validateObjectIdParam("id"), async (req, res) => {
 router.get("/topics", async (req, res) => {
   try {
     const filter = req.query.moduleId ? { moduleId: req.query.moduleId } : {};
-    const topics = await Topic.find(filter).sort({ name: 1 });
-    return res.json(topics);
+    const pagination = getPaginationParams(req.query);
+    const query = Topic.find(filter).sort({ name: 1 });
+
+    if (!pagination) {
+      const topics = await query;
+      return res.json(topics);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [topics, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Topic.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: topics, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch topics" });
   }
@@ -458,6 +827,26 @@ router.get("/topics", async (req, res) => {
 
 router.post("/topic", validateTopicBody, async (req, res) => {
   try {
+    const moduleDoc = await ensureEntityExists(Module, req.body.moduleId);
+
+    if (!moduleDoc) {
+      return sendNotFound(res, "Module not found");
+    }
+
+    const duplicate = await findCaseInsensitiveDuplicate({
+      Model: Topic,
+      field: "name",
+      value: req.body.name,
+      scope: { moduleId: req.body.moduleId },
+    });
+
+    if (duplicate) {
+      return sendConflict(
+        res,
+        "A topic with this name already exists in the selected module."
+      );
+    }
+
     const topic = await Topic.create({
       name: req.body.name.trim(),
       moduleId: req.body.moduleId,
@@ -465,6 +854,13 @@ router.post("/topic", validateTopicBody, async (req, res) => {
 
     return res.status(201).json(topic);
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendConflict(
+        res,
+        "A topic with this name already exists in the selected module."
+      );
+    }
+
     return res.status(500).json({ message: "Failed to create topic" });
   }
 });
@@ -475,6 +871,29 @@ router.put(
   validateTopicBody,
   async (req, res) => {
     try {
+      const moduleDoc = await Module.findById(req.body.moduleId).select(
+        "_id number title"
+      );
+
+      if (!moduleDoc) {
+        return sendNotFound(res, "Module not found");
+      }
+
+      const duplicate = await findCaseInsensitiveDuplicate({
+        Model: Topic,
+        field: "name",
+        value: req.body.name,
+        scope: { moduleId: req.body.moduleId },
+        excludeId: req.params.id,
+      });
+
+      if (duplicate) {
+        return sendConflict(
+          res,
+          "A topic with this name already exists in the selected module."
+        );
+      }
+
       const topic = await Topic.findByIdAndUpdate(
         req.params.id,
         {
@@ -490,6 +909,13 @@ router.put(
 
       return res.json(topic);
     } catch (error) {
+      if (error?.code === 11000) {
+        return sendConflict(
+          res,
+          "A topic with this name already exists in the selected module."
+        );
+      }
+
       return res.status(500).json({ message: "Failed to update topic" });
     }
   }
@@ -497,6 +923,15 @@ router.put(
 
 router.delete("/topic/:id", validateObjectIdParam("id"), async (req, res) => {
   try {
+    const hasQuestions = await Question.exists({ topicId: req.params.id });
+
+    if (hasQuestions) {
+      return sendConflict(
+        res,
+        "Cannot delete this topic while questions still belong to it."
+      );
+    }
+
     const topic = await Topic.findByIdAndDelete(req.params.id);
 
     if (!topic) {
@@ -512,8 +947,23 @@ router.delete("/topic/:id", validateObjectIdParam("id"), async (req, res) => {
 router.get("/questions", async (req, res) => {
   try {
     const filter = req.query.topicId ? { topicId: req.query.topicId } : {};
-    const questions = await Question.find(filter).sort({ createdAt: -1 });
-    return res.json(questions);
+    const pagination = getPaginationParams(req.query);
+    const query = Question.find(filter).sort({ createdAt: -1 });
+
+    if (!pagination) {
+      const questions = await query;
+      return res.json(questions);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [questions, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Question.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: questions, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch questions" });
   }
@@ -522,6 +972,12 @@ router.get("/questions", async (req, res) => {
 router.post("/question", validateQuestionBody, async (req, res) => {
   try {
     const questionPayload = normalizeQuestionPayload(req.body);
+    const topic = await Topic.findById(questionPayload.topicId).select("_id name");
+
+    if (!topic) {
+      return sendNotFound(res, "Topic not found");
+    }
+
     const question = await Question.create(questionPayload);
 
     await createStudentNotification({
@@ -534,6 +990,9 @@ router.post("/question", validateQuestionBody, async (req, res) => {
         type: "question",
         questionId: String(question._id),
         topicId: String(question.topicId),
+        url: buildNotificationUrl(`questions/${topic._id}`, {
+          topicName: topic.name || "Question Bank",
+        }),
       },
       createdBy: req.user._id,
       premiumOnly: true,
@@ -553,9 +1012,14 @@ router.put(
     try {
       const question = await Question.findById(req.params.id);
       const questionPayload = normalizeQuestionPayload(req.body);
+      const topic = await ensureEntityExists(Topic, questionPayload.topicId);
 
       if (!question) {
         return res.status(404).json({ message: "Question not found" });
+      }
+
+      if (!topic) {
+        return sendNotFound(res, "Topic not found");
       }
 
       Object.assign(question, questionPayload);
@@ -570,6 +1034,18 @@ router.put(
 
 router.delete("/question/:id", validateObjectIdParam("id"), async (req, res) => {
   try {
+    const [hasBookmarks, hasReports] = await Promise.all([
+      Bookmark.exists({ questionId: req.params.id }),
+      Report.exists({ questionId: req.params.id }),
+    ]);
+
+    if (hasBookmarks || hasReports) {
+      return sendConflict(
+        res,
+        "Cannot delete this question while bookmarks or reports still refer to it."
+      );
+    }
+
     const question = await Question.findByIdAndDelete(req.params.id);
 
     if (!question) {
@@ -585,8 +1061,23 @@ router.delete("/question/:id", validateObjectIdParam("id"), async (req, res) => 
 router.get("/concepts", async (req, res) => {
   try {
     const filter = req.query.moduleId ? { moduleId: req.query.moduleId } : {};
-    const concepts = await Concept.find(filter).sort({ title: 1 });
-    return res.json(concepts);
+    const pagination = getPaginationParams(req.query);
+    const query = Concept.find(filter).sort({ title: 1 });
+
+    if (!pagination) {
+      const concepts = await query;
+      return res.json(concepts);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [concepts, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Concept.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: concepts, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch concepts" });
   }
@@ -594,7 +1085,16 @@ router.get("/concepts", async (req, res) => {
 
 router.post("/concept", validateConceptBody, async (req, res) => {
   try {
-    const concept = await Concept.create(normalizeConceptPayload(req.body));
+    const conceptPayload = normalizeConceptPayload(req.body);
+    const moduleDoc = await Module.findById(conceptPayload.moduleId).select(
+      "_id number title"
+    );
+
+    if (!moduleDoc) {
+      return sendNotFound(res, "Module not found");
+    }
+
+    const concept = await Concept.create(conceptPayload);
 
     await createStudentNotification({
       title: "New concept added",
@@ -604,6 +1104,10 @@ router.post("/concept", validateConceptBody, async (req, res) => {
         type: "concept",
         conceptId: String(concept._id),
         moduleId: String(concept.moduleId),
+        url: buildNotificationUrl(`concepts/${moduleDoc._id}`, {
+          moduleNumber: moduleDoc.number,
+          moduleTitle: moduleDoc.title || "Module",
+        }),
       },
       createdBy: req.user._id,
       premiumOnly: true,
@@ -621,9 +1125,16 @@ router.put(
   validateConceptBody,
   async (req, res) => {
     try {
+      const conceptPayload = normalizeConceptPayload(req.body);
+      const moduleDoc = await ensureEntityExists(Module, conceptPayload.moduleId);
+
+      if (!moduleDoc) {
+        return sendNotFound(res, "Module not found");
+      }
+
       const concept = await Concept.findByIdAndUpdate(
         req.params.id,
-        normalizeConceptPayload(req.body),
+        conceptPayload,
         { returnDocument: "after" }
       );
 
@@ -655,8 +1166,23 @@ router.delete("/concept/:id", validateObjectIdParam("id"), async (req, res) => {
 router.get("/notes", async (req, res) => {
   try {
     const filter = req.query.moduleId ? { moduleId: req.query.moduleId } : {};
-    const notes = await Note.find(filter).sort({ _id: -1 });
-    return res.json(notes);
+    const pagination = getPaginationParams(req.query);
+    const query = Note.find(filter).sort({ _id: -1 });
+
+    if (!pagination) {
+      const notes = await query;
+      return res.json(notes);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [notes, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Note.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: notes, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch notes" });
   }
@@ -689,6 +1215,12 @@ router.post(
     let uploadedFile;
 
     try {
+      const moduleDoc = await ensureEntityExists(Module, req.body.moduleId);
+
+      if (!moduleDoc) {
+        return sendNotFound(res, "Module not found");
+      }
+
       uploadedFile = await uploadLocalFileToCloudinary(req.file.path);
       const fileMetadata = buildUploadedFileMetadata(req.file, uploadedFile);
 
@@ -713,6 +1245,10 @@ router.post(
           type: "note",
           noteId: String(note._id),
           moduleId: String(note.moduleId),
+          url: buildNotificationUrl(`notes/${note.moduleId}`, {
+            moduleNumber: moduleDoc.number,
+            moduleTitle: moduleDoc.title || "Module",
+          }),
         },
         createdBy: req.user._id,
         premiumOnly: true,
@@ -752,8 +1288,23 @@ router.delete("/note/:id", validateObjectIdParam("id"), async (req, res) => {
 
 router.get("/users", async (req, res) => {
   try {
-    const users = await User.find().select("-passwordHash");
-    return res.json(users);
+    const pagination = getPaginationParams(req.query);
+    const query = User.find().select("-passwordHash");
+
+    if (!pagination) {
+      const users = await query;
+      return res.json(users);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [users, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      User.countDocuments(),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: users, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch users" });
   }
@@ -797,11 +1348,26 @@ router.put("/users/:id/grant", validateObjectIdParam("id"), async (req, res) => 
 
 router.get("/reports", async (req, res) => {
   try {
-    const reports = await Report.find({ status: "pending" })
+    const filter = { status: "pending" };
+    const pagination = getPaginationParams(req.query);
+    const query = Report.find(filter)
       .populate("userId", "name email")
       .populate("questionId", "questionText");
 
-    return res.json(reports);
+    if (!pagination) {
+      const reports = await query;
+      return res.json(reports);
+    }
+
+    const { page, limit, skip } = pagination;
+    const [reports, total] = await Promise.all([
+      query.skip(skip).limit(limit),
+      Report.countDocuments(filter),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({ items: reports, total, page, limit })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch reports" });
   }
