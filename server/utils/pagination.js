@@ -31,12 +31,17 @@ function getPaginationParams(query = {}) {
 }
 
 function buildPaginatedResponse({ items, total, page, limit, key = "items" }) {
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
   return {
     [key]: items,
     page,
     limit,
     total,
-    totalPages: Math.max(1, Math.ceil(total / limit)),
+    totalItems: total,
+    totalPages,
+    hasNextPage: page < totalPages,
+    hasPreviousPage: page > 1,
   };
 }
 

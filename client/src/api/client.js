@@ -10,6 +10,34 @@ const apiClient = axios.create({
   timeout: 15000,
 });
 
+const GET_RETRY_DELAY_MS = 1200;
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const shouldRetryGetRequest = (error) => {
+  const method = (error?.config?.method || "").toLowerCase();
+
+  if (method !== "get") {
+    return false;
+  }
+
+  if (error?.response) {
+    return false;
+  }
+
+  const retryCount = Number(error?.config?.__retryCount || 0);
+
+  if (retryCount >= 1) {
+    return false;
+  }
+
+  return (
+    error?.code === "ECONNABORTED" ||
+    error?.message === "Network Error" ||
+    Boolean(error?.request)
+  );
+};
+
 apiClient.interceptors.request.use(async (config) => {
   const token = await SecureStore.getItemAsync("authToken");
 
@@ -24,6 +52,16 @@ apiClient.interceptors.request.use(async (config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
+    if (shouldRetryGetRequest(error)) {
+      const config = {
+        ...error.config,
+        __retryCount: Number(error?.config?.__retryCount || 0) + 1,
+      };
+
+      await wait(GET_RETRY_DELAY_MS);
+      return apiClient(config);
+    }
+
     const status = error?.response?.status;
     const responseMessage = error?.response?.data?.message;
     const requestUrl = error?.config?.url || "";

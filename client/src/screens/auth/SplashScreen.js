@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAuthStore } from "../../store/authStore";
 
@@ -18,32 +18,80 @@ export default function SplashScreen({ navigation }) {
   const isPaid = useAuthStore((state) => state.isPaid);
   const accessExpiry = useAuthStore((state) => state.accessExpiry);
   const userRole = useAuthStore((state) => state.user?.role);
+  const revalidateSession = useAuthStore((state) => state.revalidateSession);
+  const [recoverableError, setRecoverableError] = useState("");
+  const [checkingSession, setCheckingSession] = useState(true);
+  const hasBootstrapped = useRef(false);
 
   useEffect(() => {
     hydrateSession();
   }, [hydrateSession]);
 
+  const continueWithSession = useCallback(
+    async (currentToken) => {
+      if (!currentToken) {
+        navigation.replace("Login");
+        return;
+      }
+
+      setCheckingSession(true);
+      setRecoverableError("");
+
+      const result = await revalidateSession();
+
+      if (result.status === "invalid") {
+        navigation.replace("Login");
+        return;
+      }
+
+      if (result.status === "unavailable") {
+        setRecoverableError(
+          result.message ||
+            "Unable to reach the server right now. Please try again."
+        );
+        setCheckingSession(false);
+        return;
+      }
+
+      const nextUser = result.user;
+      navigation.replace(
+        nextUser?.role === "admin" ||
+          hasActiveAccess(Boolean(nextUser?.isPaid), nextUser?.accessExpiry)
+          ? "MainTabs"
+          : "Paywall"
+      );
+    },
+    [navigation, revalidateSession]
+  );
+
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || hasBootstrapped.current) {
       return;
     }
 
-    if (!token) {
-      navigation.replace("Login");
-      return;
-    }
+    hasBootstrapped.current = true;
+    continueWithSession(token);
+  }, [continueWithSession, hydrated, token]);
 
-    navigation.replace(
-      userRole === "admin" || hasActiveAccess(isPaid, accessExpiry)
-        ? "MainTabs"
-        : "Paywall"
+  if (recoverableError) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.logo}>ExamPulse</Text>
+        <Text style={styles.caption}>{recoverableError}</Text>
+        <Pressable
+          onPress={() => continueWithSession(token)}
+          style={styles.retryButton}
+        >
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </Pressable>
+      </View>
     );
-  }, [accessExpiry, hydrated, isPaid, navigation, token, userRole]);
+  }
 
   return (
     <View style={styles.container}>
       <Text style={styles.logo}>ExamPulse</Text>
-      <ActivityIndicator size="large" color="#1f6feb" />
+      <ActivityIndicator size="large" color="#1f6feb" animating={checkingSession} />
       <Text style={styles.caption}>Preparing your study dashboard...</Text>
     </View>
   );
@@ -67,5 +115,16 @@ const styles = StyleSheet.create({
     marginTop: 14,
     fontSize: 15,
     color: "#4a5f82",
+  },
+  retryButton: {
+    marginTop: 20,
+    backgroundColor: "#1f6feb",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 999,
+  },
+  retryButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
   },
 });

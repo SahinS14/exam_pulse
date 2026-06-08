@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
 import { searchContent } from "../api/content";
 import AppBrandHeader from "../components/AppBrandHeader";
@@ -181,6 +181,8 @@ export default function SearchScreen({ navigation }) {
   const userId = useAuthStore((state) => state.user?._id);
   const selectedBranch = useAppStore((state) => state.selectedBranch);
   const selectedSemester = useAppStore((state) => state.selectedSemester);
+  const sessionRefreshNonce = useAppStore((state) => state.sessionRefreshNonce);
+  const isFocused = useIsFocused();
 
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -198,17 +200,17 @@ export default function SearchScreen({ navigation }) {
     }, [userId])
   );
 
-  useEffect(() => {
-    const normalized = query.trim();
+  const runSearch = useCallback(
+    async (term) => {
+      const normalized = term.trim();
 
-    if (normalized.length < 2) {
-      setLoading(false);
-      setError("");
-      setResults({ questions: [], concepts: [], notes: [] });
-      return;
-    }
+      if (normalized.length < 2) {
+        setLoading(false);
+        setError("");
+        setResults({ questions: [], concepts: [], notes: [] });
+        return;
+      }
 
-    const timeoutId = setTimeout(async () => {
       try {
         setLoading(true);
         setError("");
@@ -225,10 +227,38 @@ export default function SearchScreen({ navigation }) {
       } finally {
         setLoading(false);
       }
+    },
+    [selectedBranch?._id, selectedSemester?._id, userId]
+  );
+
+  useEffect(() => {
+    const normalized = query.trim();
+
+    if (normalized.length < 2) {
+      setLoading(false);
+      setError("");
+      setResults({ questions: [], concepts: [], notes: [] });
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      runSearch(normalized);
     }, 300);
 
     return () => clearTimeout(timeoutId);
-  }, [query, selectedBranch, selectedSemester, userId]);
+  }, [query, runSearch]);
+
+  useEffect(() => {
+    if (!isFocused || !sessionRefreshNonce) {
+      return;
+    }
+
+    if (query.trim().length < 2) {
+      return;
+    }
+
+    runSearch(query.trim());
+  }, [isFocused, query, runSearch, sessionRefreshNonce]);
 
   const hasResults = useMemo(
     () =>

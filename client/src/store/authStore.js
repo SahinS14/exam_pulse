@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
 
+import { validateSessionRequest } from "../api/session";
 import { useAppStore } from "./appStore";
 import { clearUserScopedClientState } from "../utils/userScopedState";
 
@@ -31,6 +32,8 @@ export const useAuthStore = create((set) => ({
   isPaid: false,
   accessExpiry: null,
   hydrated: false,
+  sessionCheckStatus: "idle",
+  sessionCheckMessage: "",
   hydrateSession: async () => {
     try {
       const session = await SecureStore.getItemAsync(AUTH_SESSION_KEY);
@@ -42,6 +45,8 @@ export const useAuthStore = create((set) => ({
           isPaid: false,
           accessExpiry: null,
           hydrated: true,
+          sessionCheckStatus: "idle",
+          sessionCheckMessage: "",
         });
         return;
       }
@@ -54,6 +59,8 @@ export const useAuthStore = create((set) => ({
         isPaid: parsedSession.isPaid,
         accessExpiry: parsedSession.accessExpiry,
         hydrated: true,
+        sessionCheckStatus: "idle",
+        sessionCheckMessage: "",
       });
     } catch (error) {
       await clearSession();
@@ -63,6 +70,8 @@ export const useAuthStore = create((set) => ({
         isPaid: false,
         accessExpiry: null,
         hydrated: true,
+        sessionCheckStatus: "idle",
+        sessionCheckMessage: "",
       });
     }
   },
@@ -75,19 +84,34 @@ export const useAuthStore = create((set) => ({
     };
 
     await saveSession(nextState);
-    set(nextState);
+    set({
+      ...nextState,
+      sessionCheckStatus: "healthy",
+      sessionCheckMessage: "",
+    });
   },
   logout: async () => {
     const userId = useAuthStore.getState().user?._id || null;
-    await clearUserScopedClientState(userId);
-    await useAppStore.getState().clearContext();
-    await clearSession();
-    set({
-      user: null,
-      token: null,
-      isPaid: false,
-      accessExpiry: null,
-    });
+    try {
+      await clearUserScopedClientState(userId);
+    } catch (error) {}
+
+    try {
+      await useAppStore.getState().clearContext();
+    } catch (error) {}
+
+    try {
+      await clearSession();
+    } finally {
+      set({
+        user: null,
+        token: null,
+        isPaid: false,
+        accessExpiry: null,
+        sessionCheckStatus: "idle",
+        sessionCheckMessage: "",
+      });
+    }
   },
   updatePaymentStatus: async ({ isPaid, accessExpiry }) => {
     let snapshot;
@@ -124,5 +148,60 @@ export const useAuthStore = create((set) => ({
     });
 
     await saveSession(snapshot);
+  },
+  revalidateSession: async () => {
+    const token = useAuthStore.getState().token;
+
+    if (!token) {
+      return { status: "missing" };
+    }
+
+    set({
+      sessionCheckStatus: "checking",
+      sessionCheckMessage: "",
+    });
+
+    try {
+      const data = await validateSessionRequest();
+      const user = data?.user || null;
+      const nextState = {
+        token,
+        user,
+        isPaid: Boolean(user?.isPaid),
+        accessExpiry: user?.accessExpiry || null,
+      };
+
+      await saveSession(nextState);
+      set({
+        ...nextState,
+        sessionCheckStatus: "healthy",
+        sessionCheckMessage: "",
+      });
+
+      return {
+        status: "valid",
+        user,
+      };
+    } catch (error) {
+      if (error?.response?.status === 401) {
+        await useAuthStore.getState().logout();
+        return { status: "invalid" };
+      }
+
+      const message =
+        error?.response?.data?.message ||
+        error?.message ||
+        "Unable to reach the server right now.";
+
+      set({
+        sessionCheckStatus: "unavailable",
+        sessionCheckMessage: message,
+      });
+
+      return {
+        status: "unavailable",
+        message,
+      };
+    }
   },
 }));

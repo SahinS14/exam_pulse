@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
-import { SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getQuestionsByTopic } from "../api/content";
+import { getQuestionsByTopicPage } from "../api/content";
 import PageSkeleton from "../components/PageSkeleton";
 import QuestionGroupList from "../components/QuestionGroupList";
 import { ErrorState } from "../components/ScreenState";
@@ -16,6 +16,22 @@ import {
   useAppTheme,
 } from "../utils/theme";
 
+const PAGE_SIZE = 20;
+
+function mergeUniqueById(currentItems, nextItems) {
+  const seen = new Set(currentItems.map((item) => item._id));
+  const merged = [...currentItems];
+
+  nextItems.forEach((item) => {
+    if (!seen.has(item._id)) {
+      seen.add(item._id);
+      merged.push(item);
+    }
+  });
+
+  return merged;
+}
+
 export default function QuestionListScreen({ navigation, route }) {
   const { colors } = useAppTheme();
   const topic =
@@ -27,23 +43,55 @@ export default function QuestionListScreen({ navigation, route }) {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const [page, setPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(false);
 
-  const loadQuestions = useCallback(async (isRefresh = false) => {
+  const loadQuestions = useCallback(async ({ isRefresh = false, nextPage = 1 } = {}) => {
     try {
-      setError("");
+      const append = nextPage > 1 && !isRefresh;
+
+      if (!append) {
+        setError("");
+      }
+      setLoadMoreError("");
+
       if (isRefresh) {
         setRefreshing(true);
+      } else if (append) {
+        setLoadingMore(true);
       } else {
         setLoading(true);
       }
-      const data = await getQuestionsByTopic(topic._id);
-      setQuestions(data);
+
+      const response = await getQuestionsByTopicPage({
+        topicId: topic._id,
+        page: nextPage,
+        limit: PAGE_SIZE,
+      });
+
+      const nextItems = response.items || [];
+
+      setQuestions((currentItems) =>
+        append ? mergeUniqueById(currentItems, nextItems) : nextItems
+      );
+      setPage(response.page || nextPage);
+      setHasNextPage(Boolean(response.hasNextPage));
     } catch (loadError) {
-      setError(loadError.response?.data?.message || "Failed to load questions.");
+      const message =
+        loadError.response?.data?.message || "Failed to load questions.";
+
+      if (nextPage > 1 && !isRefresh) {
+        setLoadMoreError(message);
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
   }, [topic._id]);
 
@@ -52,6 +100,14 @@ export default function QuestionListScreen({ navigation, route }) {
       loadQuestions();
     }, [loadQuestions])
   );
+
+  const handleLoadMore = useCallback(() => {
+    if (loading || refreshing || loadingMore || !hasNextPage) {
+      return;
+    }
+
+    loadQuestions({ nextPage: page + 1 });
+  }, [hasNextPage, loadQuestions, loading, loadingMore, page, refreshing]);
 
   const stats = useMemo(() => {
     const highFrequencyCount = questions.filter((item) => Number(item.frequency) > 2).length;
@@ -87,7 +143,34 @@ export default function QuestionListScreen({ navigation, route }) {
         }
         questions={questions}
         refreshing={refreshing}
-        onRefresh={() => loadQuestions(true)}
+        onRefresh={() => loadQuestions({ isRefresh: true, nextPage: 1 })}
+        footerContent={
+          hasNextPage ? (
+            <View style={styles.loadMoreWrap}>
+              {loadMoreError ? (
+                <Text style={[styles.loadMoreError, { color: colors.danger }]}>
+                  {loadMoreError}
+                </Text>
+              ) : null}
+              <Pressable
+                disabled={loadingMore}
+                onPress={handleLoadMore}
+                style={[
+                  styles.loadMoreButton,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                    opacity: loadingMore ? 0.7 : 1,
+                  },
+                ]}
+              >
+                <Text style={[styles.loadMoreText, { color: colors.primary }]}>
+                  {loadingMore ? "Loading more..." : "Load More"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null
+        }
         headerContent={
           <View
             style={[
@@ -184,5 +267,24 @@ const styles = StyleSheet.create({
   statText: {
     fontSize: typography.sm,
     fontWeight: fontWeights.semibold,
+  },
+  loadMoreButton: {
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    alignSelf: "center",
+  },
+  loadMoreWrap: {
+    alignItems: "center",
+  },
+  loadMoreText: {
+    fontSize: typography.md,
+    fontWeight: fontWeights.bold,
+  },
+  loadMoreError: {
+    fontSize: typography.sm,
+    marginBottom: spacing.sm,
+    textAlign: "center",
   },
 });

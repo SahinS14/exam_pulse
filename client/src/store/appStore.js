@@ -23,6 +23,7 @@ export const useAppStore = create((set) => ({
   selectedBranch: null,
   selectedSemester: null,
   hydrated: false,
+  sessionRefreshNonce: 0,
   hydrateContext: async () => {
     try {
       const storedContext = await getScopedSecureItem(USER_SCOPED_KEYS.browseContext);
@@ -83,6 +84,11 @@ export const useAppStore = create((set) => ({
       selectedBranch: null,
       selectedSemester: null,
       hydrated: true,
+    });
+  },
+  triggerSessionRefresh: () => {
+    set({
+      sessionRefreshNonce: Date.now(),
     });
   },
 }));

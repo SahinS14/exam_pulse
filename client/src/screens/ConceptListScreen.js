@@ -13,7 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getConcepts } from "../api/content";
+import { getConceptsPage } from "../api/content";
 import AnimatedScreenView from "../components/AnimatedScreenView";
 import EmptyState from "../components/EmptyState";
 import PageSkeleton from "../components/PageSkeleton";
@@ -29,6 +29,22 @@ import {
   typography,
   useAppTheme,
 } from "../utils/theme";
+
+const PAGE_SIZE = 20;
+
+function mergeUniqueById(currentItems, nextItems) {
+  const seen = new Set(currentItems.map((item) => item._id));
+  const merged = [...currentItems];
+
+  nextItems.forEach((item) => {
+    if (!seen.has(item._id)) {
+      seen.add(item._id);
+      merged.push(item);
+    }
+  });
+
+  return merged;
+}
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -48,23 +64,55 @@ export default function ConceptListScreen({ navigation, route }) {
   const [expandedId, setExpandedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const [page, setPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(false);
 
-  const loadConcepts = useCallback(async (isRefresh = false) => {
+  const loadConcepts = useCallback(async ({ isRefresh = false, nextPage = 1 } = {}) => {
     try {
-      setError("");
+      const append = nextPage > 1 && !isRefresh;
+
+      if (!append) {
+        setError("");
+      }
+      setLoadMoreError("");
+
       if (isRefresh) {
         setRefreshing(true);
+      } else if (append) {
+        setLoadingMore(true);
       } else {
         setLoading(true);
       }
-      const data = await getConcepts(module._id);
-      setConcepts(data);
+
+      const response = await getConceptsPage({
+        moduleId: module._id,
+        page: nextPage,
+        limit: PAGE_SIZE,
+      });
+
+      const nextItems = response.items || [];
+
+      setConcepts((currentItems) =>
+        append ? mergeUniqueById(currentItems, nextItems) : nextItems
+      );
+      setPage(response.page || nextPage);
+      setHasNextPage(Boolean(response.hasNextPage));
     } catch (loadError) {
-      setError(loadError.response?.data?.message || "Failed to load concepts.");
+      const message =
+        loadError.response?.data?.message || "Failed to load concepts.";
+
+      if (nextPage > 1 && !isRefresh) {
+        setLoadMoreError(message);
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
   }, [module._id]);
 
@@ -73,6 +121,14 @@ export default function ConceptListScreen({ navigation, route }) {
       loadConcepts();
     }, [loadConcepts])
   );
+
+  const handleLoadMore = useCallback(() => {
+    if (loading || refreshing || loadingMore || !hasNextPage) {
+      return;
+    }
+
+    loadConcepts({ nextPage: page + 1 });
+  }, [hasNextPage, loadConcepts, loading, loadingMore, page, refreshing]);
 
   const toggleExpand = (id) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -116,7 +172,7 @@ export default function ConceptListScreen({ navigation, route }) {
         data={concepts}
         keyExtractor={(item) => item._id}
         refreshing={refreshing}
-        onRefresh={() => loadConcepts(true)}
+        onRefresh={() => loadConcepts({ isRefresh: true, nextPage: 1 })}
         contentContainerStyle={[
           styles.list,
           {
@@ -133,6 +189,33 @@ export default function ConceptListScreen({ navigation, route }) {
             </Text>
             <SectionHeader title="Tap a concept to expand" />
           </AnimatedScreenView>
+        }
+        ListFooterComponent={
+          hasNextPage ? (
+            <View style={[styles.footerWrap, { maxWidth: layout.contentMaxWidth }]}>
+              {loadMoreError ? (
+                <Text style={[styles.loadMoreError, { color: colors.danger }]}>
+                  {loadMoreError}
+                </Text>
+              ) : null}
+              <Pressable
+                disabled={loadingMore}
+                onPress={handleLoadMore}
+                style={[
+                  styles.loadMoreButton,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                    opacity: loadingMore ? 0.7 : 1,
+                  },
+                ]}
+              >
+                <Text style={[styles.loadMoreText, { color: colors.primary }]}>
+                  {loadingMore ? "Loading more..." : "Load More"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null
         }
         renderItem={({ item, index }) => {
           const expanded = expandedId === item._id;
@@ -245,5 +328,26 @@ const styles = StyleSheet.create({
   detailLinkText: {
     fontSize: typography.md,
     fontWeight: fontWeights.semibold,
+  },
+  footerWrap: {
+    width: "100%",
+    alignSelf: "center",
+    alignItems: "center",
+    marginTop: spacing.sm,
+  },
+  loadMoreButton: {
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  loadMoreText: {
+    fontSize: typography.md,
+    fontWeight: fontWeights.bold,
+  },
+  loadMoreError: {
+    fontSize: typography.sm,
+    marginBottom: spacing.sm,
+    textAlign: "center",
   },
 });

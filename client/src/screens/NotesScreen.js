@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
+  Pressable,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -10,7 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 
-import { getNotes } from "../api/content";
+import { getNotesPage } from "../api/content";
 import EmptyState from "../components/EmptyState";
 import FileResourceCard from "../components/FileResourceCard";
 import SectionHeader from "../components/SectionHeader";
@@ -30,6 +31,22 @@ import {
   typography,
   useAppTheme,
 } from "../utils/theme";
+
+const PAGE_SIZE = 20;
+
+function mergeUniqueById(currentItems, nextItems) {
+  const seen = new Set(currentItems.map((item) => item._id));
+  const merged = [...currentItems];
+
+  nextItems.forEach((item) => {
+    if (!seen.has(item._id)) {
+      seen.add(item._id);
+      merged.push(item);
+    }
+  });
+
+  return merged;
+}
 
 function buildTypeSummary(notes) {
   const uniqueTypes = new Set(notes.map((item) => item.type).filter(Boolean));
@@ -94,28 +111,60 @@ export default function NotesScreen({ navigation, route }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [loadMoreError, setLoadMoreError] = useState("");
   const [downloadingId, setDownloadingId] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState({});
+  const [page, setPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(false);
   const compactLayout = layout.width < 390;
   const singleMetricColumn = layout.width < 350;
 
   const loadNotes = useCallback(
-    async (isRefresh = false) => {
+    async ({ isRefresh = false, nextPage = 1 } = {}) => {
       try {
-        setError("");
+        const append = nextPage > 1 && !isRefresh;
+
+        if (!append) {
+          setError("");
+        }
+        setLoadMoreError("");
+
         if (isRefresh) {
           setRefreshing(true);
+        } else if (append) {
+          setLoadingMore(true);
         } else {
           setLoading(true);
         }
-        const data = await getNotes(module._id);
-        setNotes(data);
+
+        const response = await getNotesPage({
+          moduleId: module._id,
+          page: nextPage,
+          limit: PAGE_SIZE,
+        });
+
+        const nextItems = response.items || [];
+
+        setNotes((currentItems) =>
+          append ? mergeUniqueById(currentItems, nextItems) : nextItems
+        );
+        setPage(response.page || nextPage);
+        setHasNextPage(Boolean(response.hasNextPage));
       } catch (loadError) {
-        setError(loadError.response?.data?.message || "Failed to load notes.");
+        const message =
+          loadError.response?.data?.message || "Failed to load notes.";
+
+        if (nextPage > 1 && !isRefresh) {
+          setLoadMoreError(message);
+        } else {
+          setError(message);
+        }
       } finally {
         setLoading(false);
         setRefreshing(false);
+        setLoadingMore(false);
       }
     },
     [module._id]
@@ -126,6 +175,14 @@ export default function NotesScreen({ navigation, route }) {
       loadNotes();
     }, [loadNotes])
   );
+
+  const handleLoadMore = useCallback(() => {
+    if (loading || refreshing || loadingMore || !hasNextPage) {
+      return;
+    }
+
+    loadNotes({ nextPage: page + 1 });
+  }, [hasNextPage, loadNotes, loading, loadingMore, page, refreshing]);
 
   const totalFiles = notes.length;
   const pdfCount = useMemo(
@@ -267,7 +324,7 @@ export default function NotesScreen({ navigation, route }) {
         data={notes}
         keyExtractor={(item) => item._id}
         refreshing={refreshing}
-        onRefresh={() => loadNotes(true)}
+        onRefresh={() => loadNotes({ isRefresh: true, nextPage: 1 })}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={
@@ -276,6 +333,33 @@ export default function NotesScreen({ navigation, route }) {
             title="No notes uploaded yet"
             subtitle="Module notes, handwritten sheets, and revision files will appear here once added."
           />
+        }
+        ListFooterComponent={
+          hasNextPage ? (
+            <View style={[styles.footerWrap, { maxWidth: layout.contentMaxWidth }]}>
+              {loadMoreError ? (
+                <Text style={[styles.loadMoreError, { color: colors.danger }]}>
+                  {loadMoreError}
+                </Text>
+              ) : null}
+              <Pressable
+                disabled={loadingMore}
+                onPress={handleLoadMore}
+                style={[
+                  styles.loadMoreButton,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                    opacity: loadingMore ? 0.7 : 1,
+                  },
+                ]}
+              >
+                <Text style={[styles.loadMoreText, { color: colors.primary }]}>
+                  {loadingMore ? "Loading more..." : "Load More"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null
         }
         contentContainerStyle={[
           styles.list,
@@ -418,5 +502,26 @@ const styles = StyleSheet.create({
     width: "100%",
     marginBottom: spacing.md,
     alignSelf: "center",
+  },
+  footerWrap: {
+    width: "100%",
+    alignSelf: "center",
+    alignItems: "center",
+    marginTop: spacing.sm,
+  },
+  loadMoreButton: {
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  loadMoreText: {
+    fontSize: typography.md,
+    fontWeight: fontWeights.bold,
+  },
+  loadMoreError: {
+    fontSize: typography.sm,
+    marginBottom: spacing.sm,
+    textAlign: "center",
   },
 });

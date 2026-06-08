@@ -35,6 +35,13 @@ export const getQuestionsByTopic = async (topicId) => {
   return response.data;
 };
 
+export const getQuestionsByTopicPage = async ({ topicId, page, limit }) => {
+  const response = await apiClient.get(`/questions/topic/${topicId}`, {
+    params: { page, limit },
+  });
+  return response.data;
+};
+
 export const getMostRepeatedQuestions = async (moduleId) => {
   const response = await apiClient.get(`/questions/most-repeated/${moduleId}`);
   return response.data;
@@ -50,8 +57,22 @@ export const getConcepts = async (moduleId) => {
   return response.data;
 };
 
+export const getConceptsPage = async ({ moduleId, page, limit }) => {
+  const response = await apiClient.get(`/concepts/${moduleId}`, {
+    params: { page, limit },
+  });
+  return response.data;
+};
+
 export const getNotes = async (moduleId) => {
   const response = await apiClient.get(`/notes/${moduleId}`);
+  return response.data;
+};
+
+export const getNotesPage = async ({ moduleId, page, limit }) => {
+  const response = await apiClient.get(`/notes/${moduleId}`, {
+    params: { page, limit },
+  });
   return response.data;
 };
 

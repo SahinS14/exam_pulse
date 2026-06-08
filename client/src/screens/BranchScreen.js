@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
 import { getBranches } from "../api/content";
 import AppBrandHeader from "../components/AppBrandHeader";
@@ -187,6 +187,8 @@ export default function BranchScreen({ navigation }) {
   const layout = useResponsiveLayout();
   const userId = useAuthStore((state) => state.user?._id);
   const setSelectedBranch = useAppStore((state) => state.setSelectedBranch);
+  const sessionRefreshNonce = useAppStore((state) => state.sessionRefreshNonce);
+  const isFocused = useIsFocused();
   const compactLayout = layout.width < 390;
   const listColumns = layout.width >= 720 ? 3 : layout.width >= 360 ? 2 : 1;
   const cardGap = spacing.md;
@@ -228,6 +230,14 @@ export default function BranchScreen({ navigation }) {
       loadBranches();
     }, [loadBranches])
   );
+
+  useEffect(() => {
+    if (!isFocused || !sessionRefreshNonce) {
+      return;
+    }
+
+    loadBranches(true);
+  }, [isFocused, loadBranches, sessionRefreshNonce]);
 
   const filteredBranches = useMemo(() => {
     const normalized = query.trim().toLowerCase();

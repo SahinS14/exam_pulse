@@ -4,13 +4,39 @@ const Topic = require("../models/Topic");
 const Question = require("../models/Question");
 const { protect } = require("../middleware/authMiddleware");
 const accessCheck = require("../middleware/accessCheck");
+const {
+  getPaginationParams,
+  buildPaginatedResponse,
+} = require("../utils/pagination");
 
 const router = express.Router();
 
 router.get("/topic/:topicId", protect, accessCheck, async (req, res) => {
   try {
-    const questions = await Question.find({ topicId: req.params.topicId });
-    return res.json(questions);
+    const query = { topicId: req.params.topicId };
+    const pagination = getPaginationParams(req.query);
+
+    if (!pagination) {
+      const questions = await Question.find(query).lean();
+      return res.json(questions);
+    }
+
+    const [questions, totalItems] = await Promise.all([
+      Question.find(query)
+        .skip(pagination.skip)
+        .limit(pagination.limit)
+        .lean(),
+      Question.countDocuments(query),
+    ]);
+
+    return res.json(
+      buildPaginatedResponse({
+        items: questions,
+        total: totalItems,
+        page: pagination.page,
+        limit: pagination.limit,
+      })
+    );
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch questions" });
   }

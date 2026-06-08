@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
+const { protect } = require("../middleware/authMiddleware");
 const { createRateLimiter } = require("../middleware/rateLimit");
 const {
   validateRegisterRequest,
@@ -32,6 +33,12 @@ const buildUserResponse = (user) => ({
   isPaid: user.isPaid,
   accessExpiry: user.accessExpiry,
   createdAt: user.createdAt,
+});
+
+router.get("/session", protect, async (req, res) => {
+  return res.json({
+    user: buildUserResponse(req.user),
+  });
 });
 
 router.post("/register", authRateLimit, validateRegisterRequest, async (req, res) => {

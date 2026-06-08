@@ -34,6 +34,7 @@ function hasActiveAccess(isPaid, accessExpiry) {
 export default function App() {
   const { isDark } = useAppTheme();
   const hydrateContext = useAppStore((state) => state.hydrateContext);
+  const triggerSessionRefresh = useAppStore((state) => state.triggerSessionRefresh);
   const hydrateThemePreference = useThemePreferenceStore(
     (state) => state.hydrateThemePreference
   );
@@ -42,6 +43,7 @@ export default function App() {
   const isPaid = useAuthStore((state) => state.isPaid);
   const accessExpiry = useAuthStore((state) => state.accessExpiry);
   const handleAccessExpired = useAuthStore((state) => state.handleAccessExpired);
+  const revalidateSession = useAuthStore((state) => state.revalidateSession);
 
   useEffect(() => {
     hydrateContext();
@@ -54,22 +56,48 @@ export default function App() {
         return;
       }
 
-      if (!token || userRole === "admin") {
+      if (!token) {
         return;
       }
 
-      if (hasActiveAccess(isPaid, accessExpiry)) {
+      const result = await revalidateSession();
+
+      if (result.status === "invalid") {
+        resetToRoute("Login");
         return;
       }
 
-      await handleAccessExpired();
-      resetToRoute("Paywall");
+      if (result.status === "valid") {
+        const nextUser = result.user;
+        const nextRole = nextUser?.role;
+        const nextPaid = Boolean(nextUser?.isPaid);
+        const nextAccessExpiry = nextUser?.accessExpiry || null;
+
+        if (
+          nextRole !== "admin" &&
+          !hasActiveAccess(nextPaid, nextAccessExpiry)
+        ) {
+          await handleAccessExpired();
+          resetToRoute("Paywall");
+          return;
+        }
+      }
+
+      triggerSessionRefresh();
     });
 
     return () => {
       subscription.remove();
     };
-  }, [accessExpiry, handleAccessExpired, isPaid, token, userRole]);
+  }, [
+    accessExpiry,
+    handleAccessExpired,
+    isPaid,
+    revalidateSession,
+    token,
+    triggerSessionRefresh,
+    userRole,
+  ]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

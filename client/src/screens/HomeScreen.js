@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import Svg, { Circle } from "react-native-svg";
 
 import { getBookmarks, getRecentUpdates } from "../api/content";
@@ -26,6 +26,7 @@ import { useAppStore } from "../store/appStore";
 import { useAuthStore } from "../store/authStore";
 import { useNotificationStore } from "../store/notificationStore";
 import { useResponsiveLayout } from "../utils/layout";
+import { resetToRoute } from "../navigation/navigationRef";
 import {
   fontWeights,
   radius,
@@ -364,6 +365,8 @@ export default function HomeScreen({ navigation }) {
   const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
   const selectedBranch = useAppStore((state) => state.selectedBranch);
   const selectedSemester = useAppStore((state) => state.selectedSemester);
+  const sessionRefreshNonce = useAppStore((state) => state.sessionRefreshNonce);
+  const isFocused = useIsFocused();
 
   const [recentUpdates, setRecentUpdates] = useState({ questions: [], notes: [] });
   const [bookmarkCount, setBookmarkCount] = useState(0);
@@ -441,6 +444,14 @@ export default function HomeScreen({ navigation }) {
       loadDashboard();
     }, [animateEntrance, loadDashboard])
   );
+
+  useEffect(() => {
+    if (!isFocused || !sessionRefreshNonce) {
+      return;
+    }
+
+    loadDashboard(true);
+  }, [isFocused, loadDashboard, sessionRefreshNonce]);
 
   useEffect(() => {
     if (!toast.message) {
@@ -817,7 +828,11 @@ export default function HomeScreen({ navigation }) {
           </LinearGradient>
 
           {profileOpen ? (
-            <Pressable style={styles.profileBackdrop} onPress={() => setProfileOpen(false)}>
+            <View style={styles.profileBackdrop}>
+              <Pressable
+                style={styles.profileBackdropDismiss}
+                onPress={() => setProfileOpen(false)}
+              />
               <View
                 style={[
                   styles.profileMenu,
@@ -848,11 +863,11 @@ export default function HomeScreen({ navigation }) {
                 <Pressable
                   onPress={async () => {
                     setProfileOpen(false);
-                    await logout();
-                    navigation.reset({
-                      index: 0,
-                      routes: [{ name: "Login" }],
-                    });
+                    try {
+                      await logout();
+                    } finally {
+                      resetToRoute("Login");
+                    }
                   }}
                   style={styles.profileRow}
                 >
@@ -860,7 +875,7 @@ export default function HomeScreen({ navigation }) {
                   <Text style={[styles.profileRowText, { color: colors.danger }]}>Logout</Text>
                 </Pressable>
               </View>
-            </Pressable>
+            </View>
           ) : null}
 
           <View style={[styles.bodyContent, constrainedWidthStyle]}>
@@ -1223,6 +1238,9 @@ const styles = StyleSheet.create({
   profileBackdrop: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 10,
+  },
+  profileBackdropDismiss: {
+    ...StyleSheet.absoluteFillObject,
   },
   profileMenu: {
     position: "absolute",

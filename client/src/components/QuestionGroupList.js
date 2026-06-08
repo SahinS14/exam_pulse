@@ -59,6 +59,7 @@ export default function QuestionGroupList({
   refreshing = false,
   onRefresh,
   headerContent,
+  footerContent,
 }) {
   const { colors } = useAppTheme();
   const layout = useResponsiveLayout();
@@ -158,6 +159,7 @@ export default function QuestionGroupList({
             ))}
           </View>
         ))}
+        {footerContent ? <View style={styles.footerWrap}>{footerContent}</View> : null}
       </AnimatedScreenView>
     </ScrollView>
   );
@@ -207,5 +209,8 @@ const styles = StyleSheet.create({
   },
   sectionWrap: {
     marginBottom: spacing.lg,
+  },
+  footerWrap: {
+    marginTop: spacing.sm,
   },
 });
